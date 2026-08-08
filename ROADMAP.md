@@ -1151,13 +1151,17 @@ ontology_version: "1.0"          # Add this — migration tooling needs a versio
       a browser preview (no console errors, graceful degradation when the
       backend is unreachable) — not yet verified against the real M920q
       backend with actual devices.
-      **Honestly scoped, not silently narrowed**: the user also asked for
-      an "mq[tt]... rules based (automation check)" active-verification
-      path — only the `ha_rest` half of that is built. MQTT/Zigbee devices
-      (push-only, no request/response) and RTSP cameras still fall back to
-      time-based tiering alone; see `device_checkin_status`'s `notes` in
-      `docs/ontology.yaml` for the exact gap and what a fast-follow would
-      need (a protocol-level liveness probe per adapter).
+      **Fast-follow, 2026-08-08**: MQTT/Zigbee now has a real active
+      verification slice too. When a Z2M device is stale, the monitor
+      re-subscribes to its authoritative `<device>/availability` topic and
+      only recovers it when the broker replays retained `online`. Retained
+      `offline`, malformed/non-retained traffic, timeout, or broker disconnect
+      does not suppress MISSED. RTSP cameras remain time-based only. Canonical
+      definitions: `z2m_retained_availability` and
+      `z2m_retained_availability_probe_result` in `docs/ontology.yaml`.
+      Targeted backend tests 17/17; full backend run 81/84 passed, with
+      only the 3 pre-existing Docker/Testcontainers tests unable to start
+      because Docker is unavailable in this environment.
 - [x] **Rules & Alerts always showed one Node-RED regardless of location
       context** (user report, 2026-08-08, verbatim: "I only see one node
       red... same context shift behavior for all locations"). `RulesPanel`

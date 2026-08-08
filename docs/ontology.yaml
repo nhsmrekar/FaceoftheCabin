@@ -942,6 +942,9 @@ elements:
       - target: device_state
         type: complements
         cardinality: "1:1"
+      - target: z2m_retained_availability_probe_result
+        type: derives_from
+        cardinality: "1:1"
       - target: audit_log
         type: consumed_by
         cardinality: "1:N"
@@ -955,16 +958,90 @@ elements:
       covered here) plus "a listener with an HA, mq, or rules based
       (automation check) way to know... based on assumption that it's
       only bad if... attempts to ping it aren't successful." The active
-      ping half is built for ha_rest devices only (DeviceRegistry.
+      ping half is built for ha_rest devices (DeviceRegistry.
       activeFetch() calls the real HomeAssistantAdapter.fetchState() --
       a genuine HTTP round-trip, not a simulation). MQTT/Zigbee devices
-      are push-only with no request/response capability to probe, so
-      those fall back to time-based tiering alone; RTSP camera devices
-      likewise have no active check built yet. Both are real, scoped
-      gaps, not oversights -- a fast-follow would need a protocol-level
-      liveness probe per adapter (e.g. an MQTT retained-message check,
-      or an RTSP connect-and-drop) that doesn't exist yet anywhere in
-      this codebase.
+      derive active verification from z2m_retained_availability_probe_result:
+      only ONLINE recovers a stale device; OFFLINE and NO_REPLY fail closed.
+      RTSP camera devices still have no active check; that remaining scoped
+      gap needs an RTSP connect-and-drop probe.
+
+  - id: z2m_retained_availability
+    entity_type: owl:DatatypeProperty
+    layer: protocol
+    primitive: true
+    schema_version: "0.4.0"
+    migration_status: complete
+    lifecycle_status: used
+    first_used:
+      date: "2026-08-08"
+      ref: "Zigbee2MQTT <device>/availability retained MQTT topic"
+    data_class: raw
+    data_type: xsd:string
+    constraint:
+      enum: [online, offline]
+      description: >
+        The last authoritative availability value retained by the MQTT broker
+        for one Zigbee2MQTT device. Retention is required; an ordinary live
+        publish is not proof that an active replay request succeeded.
+    ui_display_name: "Zigbee Availability"
+    source: "zigbee2mqtt/{friendly_name}/availability (MQTT retained message)"
+    rendering:
+      semantic: "Device answered / Device unavailable"
+      systems: "Retained Z2M availability: online | offline"
+      technical: "MqttMessage.isRetained() && payload state online|offline"
+      compliance: (not shown)
+    definition: >
+      The raw online-or-offline availability assertion Zigbee2MQTT stores as
+      a retained MQTT message for a device.
+    relationships:
+      - target: z2m_retained_availability_probe_result
+        type: consumed_by
+        cardinality: "1:N"
+    notes: >
+      This value is not itself checkin status. Its retained flag and arrival
+      in response to a fresh subscription are part of the evidence contract.
+
+  - id: z2m_retained_availability_probe_result
+    entity_type: owl:DatatypeProperty
+    layer: integration
+    primitive: false
+    schema_version: "0.4.0"
+    migration_status: complete
+    lifecycle_status: used
+    first_used:
+      date: "2026-08-08"
+      ref: "Zigbee2MqttAdapter.probeRetainedAvailability()"
+    data_class: derived
+    data_type: xsd:string
+    constraint:
+      enum: [ONLINE, OFFLINE, NO_REPLY]
+      description: >
+        ONLINE = retained online replay arrived before timeout. OFFLINE =
+        retained offline replay arrived. NO_REPLY = disconnected broker,
+        timeout, malformed retained payload, or no retained reply.
+    ui_display_name: "Zigbee Availability Check"
+    transformation: >
+      subscribe zigbee2mqtt/{friendly_name}/availability -> require retained
+      MQTT replay -> normalize payload state -> ONLINE | OFFLINE | NO_REPLY
+    rendering:
+      semantic: "Availability check result"
+      systems: "Online / Offline / No reply"
+      technical: "Optional<Boolean>: true=ONLINE, false=OFFLINE, empty=NO_REPLY"
+      compliance: (not shown)
+    definition: >
+      The normalized result of actively asking the MQTT broker to replay one
+      Zigbee device's retained authoritative availability value.
+    relationships:
+      - target: z2m_retained_availability
+        type: derives_from
+        cardinality: "N:1"
+      - target: device_checkin_status
+        type: consumed_by
+        cardinality: "1:N"
+    notes: >
+      Fail closed: only ONLINE may recover a stale device. OFFLINE and
+      NO_REPLY never suppress LATE or MISSED classification.
 
   - id: linkquality
     entity_type: owl:DatatypeProperty

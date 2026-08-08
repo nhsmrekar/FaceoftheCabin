@@ -4,12 +4,17 @@ import com.cabin.orchestrator.devices.DeviceRegistry;
 import com.cabin.orchestrator.kafka.EventPublisher;
 import com.cabin.orchestrator.signalquality.SignalQualityRegistry;
 import org.eclipse.paho.client.mqttv3.MqttMessage;
+import org.eclipse.paho.client.mqttv3.MqttClient;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.lang.reflect.Field;
+import java.time.Duration;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
 
 /**
  * Targeted coverage for the 2026-08-08 SignalQualityRegistry wiring --
@@ -84,5 +89,49 @@ class Zigbee2MqttAdapterTest {
         deliver("zigbee2mqtt/never_registered", "{\"linkquality\": 160}");
 
         assertTrue(signalQualityRegistry.assess("z2m-never_registered").isEmpty());
+    }
+
+    @Test
+    void availabilityParserAcceptsOnlyCanonicalOnlineAndOfflineValues() {
+        assertEquals(Boolean.TRUE, Zigbee2MqttAdapter.parseAvailability("{\"state\":\"online\"}").orElseThrow());
+        assertEquals(Boolean.FALSE, Zigbee2MqttAdapter.parseAvailability("offline").orElseThrow());
+        assertTrue(Zigbee2MqttAdapter.parseAvailability("unknown").isEmpty());
+        assertTrue(Zigbee2MqttAdapter.parseAvailability("not-json{").isEmpty());
+    }
+
+    private MqttClient installConnectedClient() throws Exception {
+        MqttClient client = mock(MqttClient.class);
+        when(client.isConnected()).thenReturn(true);
+        Field field = Zigbee2MqttAdapter.class.getDeclaredField("client");
+        field.setAccessible(true);
+        field.set(adapter, client);
+        return client;
+    }
+
+    @Test
+    void activeProbeAcceptsRetainedOnlineReplay() throws Exception {
+        MqttClient client = installConnectedClient();
+        doAnswer(invocation -> {
+            String topic = invocation.getArgument(0);
+            MqttMessage message = new MqttMessage("online".getBytes());
+            message.setRetained(true);
+            adapter.messageArrived(topic, message);
+            return null;
+        }).when(client).subscribe(anyString(), anyInt());
+
+        assertEquals(Boolean.TRUE, adapter.probeRetainedAvailability(
+            "zigbee2mqtt/motion_entry", Duration.ofMillis(100)).orElseThrow());
+    }
+
+    @Test
+    void activeProbeRejectsNonRetainedTrafficAsNoReply() throws Exception {
+        MqttClient client = installConnectedClient();
+        doAnswer(invocation -> {
+            adapter.messageArrived(invocation.getArgument(0), new MqttMessage("online".getBytes()));
+            return null;
+        }).when(client).subscribe(anyString(), anyInt());
+
+        assertTrue(adapter.probeRetainedAvailability(
+            "zigbee2mqtt/motion_entry", Duration.ofMillis(10)).isEmpty());
     }
 }

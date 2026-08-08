@@ -30,8 +30,8 @@ import java.util.concurrent.ConcurrentHashMap;
  * user-facing axis for this: ON_SCHEDULE → LATE (past its interval, not yet
  * confirmed dead — a grace tier, `DeviceStatus.state` is untouched here) →
  * MISSED (past a longer grace multiple; for `ha_rest` devices only after an
- * active poll also failed — `DeviceRegistry.activeFetch()` — everything
- * else has no request/response capability to probe, so time alone decides).
+ * active poll also failed, and for Zigbee only after retained MQTT
+ * availability did not confirm ONLINE; unsupported adapters use time alone).
  * `DeviceStatus.state` itself still only flips to OFFLINE at the MISSED
  * tier, same trigger point as before this change, so nothing that reads
  * `state` needs to change; CheckinStatus is additive.
@@ -60,6 +60,7 @@ public class DeviceHealthMonitor {
     private static final Duration STALE_CAMERA  = Duration.ofMinutes(5);
     private static final Duration STALE_HA      = Duration.ofMinutes(15);
     private static final Duration STALE_DEFAULT = Duration.ofMinutes(30);
+    private static final Duration MQTT_AVAILABILITY_TIMEOUT = Duration.ofSeconds(2);
 
     /** How many multiples of the stale threshold a device gets in the LATE grace tier before MISSED. */
     private static final int MISSED_MULTIPLIER = 3;
@@ -128,13 +129,17 @@ public class DeviceHealthMonitor {
     }
 
     /**
-     * For ha_rest devices only: actively poll HA directly rather than wait for the
-     * next passive update. MQTT/RTSP adapters don't support request/response, so
-     * this is always a no-op (returns false) for them — time-based tiering is all
-     * that's available there.
+     * Actively verify supported adapters. HA is polled directly. Zigbee asks
+     * MQTT for a retained authoritative availability replay and only accepts
+     * an explicit ONLINE result; OFFLINE and NO_REPLY fail closed.
      */
     private boolean tryActiveRecovery(String id, Optional<DeviceDescriptor> descriptor, Instant now) {
         String adapterType = descriptor.map(DeviceDescriptor::protocolAdapter).orElse("unknown");
+        if ("mqtt".equals(adapterType) && id.startsWith("z2m-")) {
+            return z2mAdapter.probeRetainedAvailability(
+                descriptor.map(DeviceDescriptor::connectionString).orElse(""),
+                MQTT_AVAILABILITY_TIMEOUT).orElse(false);
+        }
         if (!"ha_rest".equals(adapterType)) return false;
 
         Optional<DeviceStatus> live = registry.activeFetch(id);

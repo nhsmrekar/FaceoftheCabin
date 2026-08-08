@@ -14,6 +14,7 @@ import java.util.Optional;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
 
 /**
  * Covers the 2026-08-08 checkin-status tiering: "offline" was misleading
@@ -145,17 +146,37 @@ class DeviceHealthMonitorTest {
     }
 
     @Test
-    void mqttDeviceHasNoActiveCheckAndFollowsTimeBasedTieringOnly() {
+    void retainedOnlineAvailabilityRecoversStaleZigbeeDevice() {
         DeviceRegistry registry = new DeviceRegistry(java.util.List.of());
         registry.registerDescriptor(new DeviceDescriptor("z2m-motion", "Motion", DeviceType.MOTION_SENSOR,
             Set.of(DeviceCapability.TELEMETRY), "mqtt", "zigbee2mqtt/motion", true, "cabin"));
         registry.update(new DeviceStatus("z2m-motion", DeviceType.MOTION_SENSOR, "Motion", "ONLINE",
             Instant.now().minus(Duration.ofMinutes(11)), Map.of(), "cabin")); // past 10min Zigbee threshold
 
-        DeviceHealthMonitor monitor = monitorWith(registry);
+        Zigbee2MqttAdapter z2m = mock(Zigbee2MqttAdapter.class);
+        when(z2m.probeRetainedAvailability(eq("zigbee2mqtt/motion"), any(Duration.class)))
+            .thenReturn(Optional.of(true));
+        DeviceHealthMonitor monitor = new DeviceHealthMonitor(registry, z2m);
         monitor.checkHealth();
 
-        assertEquals(CheckinStatus.LATE, monitor.getCheckinStatuses().get("z2m-motion"));
+        assertEquals(CheckinStatus.ON_SCHEDULE, monitor.getCheckinStatuses().get("z2m-motion"));
         assertEquals("ONLINE", registry.get("z2m-motion").state());
+    }
+
+    @Test
+    void noRetainedReplyDoesNotHideMissedZigbeeDevice() {
+        DeviceRegistry registry = new DeviceRegistry(java.util.List.of());
+        registry.registerDescriptor(new DeviceDescriptor("z2m-motion", "Motion", DeviceType.MOTION_SENSOR,
+            Set.of(DeviceCapability.TELEMETRY), "mqtt", "zigbee2mqtt/motion", true, "cabin"));
+        registry.update(new DeviceStatus("z2m-motion", DeviceType.MOTION_SENSOR, "Motion", "ONLINE",
+            Instant.now().minus(Duration.ofMinutes(31)), Map.of(), "cabin"));
+        Zigbee2MqttAdapter z2m = mock(Zigbee2MqttAdapter.class);
+        when(z2m.probeRetainedAvailability(anyString(), any(Duration.class))).thenReturn(Optional.empty());
+
+        DeviceHealthMonitor monitor = new DeviceHealthMonitor(registry, z2m);
+        monitor.checkHealth();
+
+        assertEquals(CheckinStatus.MISSED, monitor.getCheckinStatuses().get("z2m-motion"));
+        assertEquals("OFFLINE", registry.get("z2m-motion").state());
     }
 }

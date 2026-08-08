@@ -16,9 +16,12 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Bridges Zigbee2MQTT into the DeviceRegistry.
@@ -59,6 +62,7 @@ public class Zigbee2MqttAdapter implements MqttCallback {
     private final Set<String> knownFriendlyNames = ConcurrentHashMap.newKeySet();
     // Tracks whether bridge is online
     private volatile String bridgeState = "offline";
+    private final Map<String, CompletableFuture<Boolean>> availabilityProbes = new ConcurrentHashMap<>();
 
     public Zigbee2MqttAdapter(DeviceRegistry registry, EventPublisher eventPublisher,
                                SignalQualityRegistry signalQualityRegistry) {
@@ -89,6 +93,7 @@ public class Zigbee2MqttAdapter implements MqttCallback {
     public void messageArrived(String topic, MqttMessage message) {
         try {
             String payload = new String(message.getPayload());
+            completeAvailabilityProbe(topic, payload, message.isRetained());
             if (topic.equals(Z2M_PREFIX + "bridge/devices")) {
                 handleBridgeDeviceList(payload);
             } else if (topic.equals(Z2M_PREFIX + "bridge/state")) {
@@ -105,6 +110,47 @@ public class Zigbee2MqttAdapter implements MqttCallback {
             }
         } catch (Exception e) {
             log.warn("Z2M message processing error on {}: {}", topic, e.getMessage());
+        }
+    }
+
+    private void completeAvailabilityProbe(String topic, String payload, boolean retained) {
+        CompletableFuture<Boolean> probe = availabilityProbes.get(topic);
+        if (probe == null || !retained) return;
+        parseAvailability(payload).ifPresentOrElse(probe::complete, () -> probe.completeExceptionally(
+            new IllegalArgumentException("Malformed retained availability")));
+    }
+
+    static Optional<Boolean> parseAvailability(String payload) {
+        try {
+            String raw = payload.trim();
+            if ("online".equalsIgnoreCase(raw)) return Optional.of(true);
+            if ("offline".equalsIgnoreCase(raw)) return Optional.of(false);
+            JsonNode node = new ObjectMapper().readTree(payload);
+            String state = node.has("state") ? node.get("state").asText() : "";
+            if ("online".equalsIgnoreCase(state)) return Optional.of(true);
+            if ("offline".equalsIgnoreCase(state)) return Optional.of(false);
+            return Optional.empty();
+        } catch (Exception e) {
+            return Optional.empty();
+        }
+    }
+
+    /** Re-subscribe and require a retained authoritative availability replay. */
+    public Optional<Boolean> probeRetainedAvailability(String deviceTopic, Duration timeout) {
+        if (client == null || !client.isConnected() || deviceTopic == null || deviceTopic.isBlank()) {
+            return Optional.empty();
+        }
+        String topic = deviceTopic + "/availability";
+        CompletableFuture<Boolean> probe = new CompletableFuture<>();
+        availabilityProbes.put(topic, probe);
+        try {
+            client.subscribe(topic, 1);
+            return Optional.of(probe.get(timeout.toMillis(), TimeUnit.MILLISECONDS));
+        } catch (Exception e) {
+            log.debug("No retained Z2M availability reply for {}: {}", deviceTopic, e.getMessage());
+            return Optional.empty();
+        } finally {
+            availabilityProbes.remove(topic, probe);
         }
     }
 

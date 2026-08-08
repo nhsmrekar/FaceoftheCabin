@@ -295,10 +295,14 @@ the actual "ping it, only bad if attempts aren't successful" mechanism
 the user asked for, just scoped to one protocol.
 
 **Still open, if picking this item back up:**
-- **MQTT/Zigbee devices have no active check** — they're push-only
-  (no request/response), so they still rely on time-based tiering alone.
-  A real fast-follow would need something like an MQTT retained-message
-  liveness check, not a fabricated ping.
+- **MQTT/Zigbee retained-availability check is now built** — stale Z2M
+  devices re-subscribe to their authoritative availability topic and only
+  recover on retained `online`. Retained `offline`, malformed/non-retained
+  traffic, timeout, or broker disconnect does not hide MISSED. The ontology
+  now defines both the raw retained value and normalized probe result.
+  Targeted backend tests: 17/17. Full backend run: 81/84 passed; the only
+  errors were the 3 already-documented Testcontainers tests because Docker
+  is unavailable in this environment.
 - **RTSP cameras (Home's 5 Reolinks) have no active check either** —
   would need a connect-and-drop probe against the RTSP URL.
 - **Not yet verified against the real M920q backend with real devices**

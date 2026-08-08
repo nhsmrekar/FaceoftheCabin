@@ -186,22 +186,43 @@ don't declare victory or defeat based on Phase 3 alone.
 ## Phase 4 — The real go/no-go: install Zigbee2MQTT and try it for real
 
 ```bash
-pkg install nodejs-lts git -y
+pkg install nodejs-lts git mosquitto -y
 git clone --depth 1 https://github.com/Koenkk/zigbee2mqtt.git
 cd zigbee2mqtt
 npm ci
 ```
+
+Zigbee2MQTT requires a reachable MQTT broker even for this coordinator-only
+test. Start a local, POC-only broker in Termux before launching it:
+```bash
+mosquitto -d
+mosquitto_sub -h localhost -t '$SYS/broker/version' -C 1 -W 5
+```
+The second command should print the local Mosquitto version and exit. If it
+times out, fix the local broker before interpreting any Zigbee2MQTT startup
+failure as a USB/coordinator failure.
 Edit `data/configuration.yaml` (copy from `data/configuration.yaml.example`
 if it doesn't exist yet) — minimal config for this test:
 ```yaml
-homeassistant: false
-permit_join: true
+version: 5
+homeassistant:
+  enabled: false
 mqtt:
-  server: 'mqtt://localhost:1883'   # doesn't need to be real yet for this test
+  server: 'mqtt://localhost:1883'
+  # Never use the production Cabin mesh's default `zigbee2mqtt` topic for
+  # this second coordinator. The unique namespace is part of the POC's
+  # safety boundary and remains unchanged in Phase 5.
+  base_topic: 'poc/home/zigbee2mqtt'
+  client_id: 'home-termux-poc'
 serial:
   port: '/dev/ttyUSB0'              # or whatever Phase 2/3 found
 frontend:
+  enabled: true
   port: 8099
+advanced:
+  network_key: GENERATE
+  pan_id: GENERATE
+  ext_pan_id: GENERATE
 ```
 Run it directly (not as a service yet):
 ```bash
@@ -231,6 +252,18 @@ hardware decision.
 
 ## Phase 5 — Reach the M920q over Tailscale (only if Phase 4 passed)
 
+> **STOP — this phase touches the live M920q MQTT broker and requires the
+> user's explicit approval at that moment.** Phase 4 is the hardware go/no-go
+> gate and is complete without Phase 5. Do not proceed merely because the
+> earlier phases passed.
+
+Cabin's live Zigbee2MQTT instance already publishes retained state and accepts
+control requests under `zigbee2mqtt/#`. Zigbee2MQTT's own documentation
+requires a different `mqtt.base_topic` for every instance. Reusing the default
+here could overwrite Cabin bridge/device discovery state or make a control
+request reach both coordinators. **Keep `poc/home/zigbee2mqtt` exactly as
+configured in Phase 4; never use or subscribe this POC to `zigbee2mqtt/#`.**
+
 Confirm Tailscale is connected on the phone (Android Tailscale app, not
 Termux) and can see the M920q:
 ```bash
@@ -240,25 +273,39 @@ ping -c 3 cabin-hub
 check the Tailscale admin console for the exact hostname/IP).
 
 Point Zigbee2MQTT's `mqtt.server` in `data/configuration.yaml` at the
-M920q's actual broker:
+M920q's actual broker, changing only `server`:
 ```yaml
 mqtt:
   server: 'mqtt://cabin-hub:1883'
+  base_topic: 'poc/home/zigbee2mqtt'
+  client_id: 'home-termux-poc'
 ```
 Restart `npm start`, and on the M920q (or from ilikethelights, if it can
-reach the broker too) confirm messages are actually arriving — either
-via `mosquitto_sub -h <cabin-hub-tailscale-ip> -t 'zigbee2mqtt/#' -v`, or
-just watch cabin-ui's **Live MQTT** tile in the Monitoring panel.
+reach the broker too) confirm messages are actually arriving via:
+```bash
+mosquitto_sub -h <cabin-hub-tailscale-ip> -t 'poc/home/zigbee2mqtt/#' -v
+```
+The current central backend does not consume this POC namespace yet; seeing
+the isolated messages arrive is the whole Phase 5 pass condition. Do not
+rename the topic to make the current UI/backend discover it — that adapter
+work belongs to the collector-hub implementation plan.
 
 ---
 
 ## Phase 6 — Pair one real test device (optional, only if you want to go this far)
 
-`permit_join: true` was already set in Phase 4's config. Put a spare
-Zigbee end device (not a live safety sensor from Cabin) in pairing mode
-and watch Zigbee2MQTT's log for a `device joined` message, then confirm
-it shows up as a topic under `zigbee2mqtt/` on the M920q's broker (same
-check as Phase 5).
+Open the POC coordinator's join window from its frontend, or publish the
+scoped request below from Termux:
+```bash
+mosquitto_pub -h cabin-hub \
+  -t 'poc/home/zigbee2mqtt/bridge/request/permit_join' \
+  -m '{"time":254}'
+```
+Put a spare Zigbee end device (not a live safety sensor from Cabin) in pairing
+mode and watch Zigbee2MQTT's log for a `device joined` message, then confirm
+it shows up under `poc/home/zigbee2mqtt/` on the M920q's broker (same check as
+Phase 5). Close the join window when finished by publishing `{"time":0}` to
+that same scoped request topic.
 
 ---
 

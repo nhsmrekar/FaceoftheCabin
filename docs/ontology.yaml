@@ -4378,6 +4378,76 @@ elements:
       `mvn test` gate so it actually runs against real Postgres on the
       next push, before anything deploys.
 
+  - id: hub_runtime_role
+    entity_type: owl:DatatypeProperty
+    layer: backend
+    primitive: true
+    schema_version: "0.4.0"
+    migration_status: complete
+    lifecycle_status: candidate
+    data_class: conceptual
+    data_type: xsd:string
+    constraint:
+      enum: [CENTRAL_BRAIN, COLLECTOR_HUB, UNDEPLOYED]
+      description: >
+        Planned field on hub_location: shared central brain, local signal
+        collector, or modeled but not deployed.
+    ui_display_name: "Location Runtime Role"
+    source: "Planned HubLocation.runtimeRole / hub_locations.runtime_role"
+    rendering:
+      semantic: "How this place connects to the platform"
+      systems: "Central brain / Collector hub / Not set up"
+      technical: "hub_runtime_role enum; collector-hub execution plan"
+      compliance: "Deployment responsibility boundary"
+    definition: >
+      The runtime responsibility of a managed place, separate from the place
+      itself and from optional service capabilities.
+    relationships:
+      - target: hub_location
+        type: complements
+        cardinality: "N:1"
+    relates_to:
+      elements: [hub_location, location_mqtt_namespace]
+    notes: >
+      Candidate only; no column or behavior exists yet. Prevents treating every
+      location as a full independent stack.
+
+  - id: location_mqtt_namespace
+    entity_type: owl:DatatypeProperty
+    layer: protocol
+    primitive: true
+    schema_version: "0.4.0"
+    migration_status: complete
+    lifecycle_status: candidate
+    data_class: conceptual
+    data_type: xsd:string
+    constraint:
+      pattern: "^[a-z0-9_-]+/zigbee2mqtt$"
+      description: >
+        Planned remote Z2M root. Cabin's unscoped topic is a temporary legacy
+        alias; new collectors are location-first.
+    ui_display_name: "Location MQTT Namespace"
+    source: "Planned HubLocation.mqttNamespace / hub_locations.mqtt_namespace"
+    rendering:
+      semantic: "Which place incoming device messages belong to"
+      systems: "Per-location MQTT topic prefix"
+      technical: "{location}/zigbee2mqtt/# on the central broker"
+      compliance: "Location-scoped transport and command boundary"
+    definition: >
+      The MQTT root that makes location explicit and prevents coordinators
+      from sharing retained state or control topics.
+    relationships:
+      - target: hub_location
+        type: depends_on
+        cardinality: "N:1"
+      - target: hub_runtime_role
+        type: complements
+        cardinality: "1:1"
+    relates_to:
+      elements: [hub_location, hub_runtime_role]
+    notes: >
+      Candidate only; current adapter hardcodes zigbee2mqtt/. Termux POC uses
+      poc/home/zigbee2mqtt, not the production namespace.
   - id: instance_template_config
     entity_type: owl:Class
     layer: backend

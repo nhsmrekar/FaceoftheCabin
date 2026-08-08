@@ -171,6 +171,11 @@ accumulate.*
   serve the fork — do not register a second one against the M920q), the
   5 still-open items from the user's last request, and reconciliation
   steps for 8/14. Remove this item once reconciled.
+- **Collector-hub architecture scoped; implementation not started.** Home is
+  the pilot collector feeding the central M920q brain. See
+  docs/EXECUTION_PLAN_2026-08-08_collector-hubs.md for the location-first
+  MQTT contract, compatibility path, security/test gates, and rollout. The
+  Termux USB result is pending; select no hardware without real evidence.
 - **Grafana embed resolved 2026-08-08 (real root cause, not the
   suspected one) — then replaced entirely by user decision.** The
   actual blocker was `hub_locations` seeded with unreachable

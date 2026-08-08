@@ -1229,6 +1229,11 @@ ontology_version: "1.0"          # Add this — migration tooling needs a versio
 
 ### Phase 8 — Accessible Hardware Program: Local Collector Hubs (planning only, 2026-08-08)
 
+> **Execution scope:** [docs/EXECUTION_PLAN_2026-08-08_collector-hubs.md](docs/EXECUTION_PLAN_2026-08-08_collector-hubs.md)
+> defines implementation slices, compatibility rules, test gates, security
+> boundaries, and the Home pilot. Runtime implementation has not started.
+>
+
 > Product decision, not yet implemented. **Corrected same day** by the
 > user after my first pass wrongly assumed the goal was cheap hardware to
 > run the *full* stack per location. The actual ask: a **local hub is a
@@ -1270,7 +1275,7 @@ existing pattern is the natural starting point for the forwarding
 mechanism, not something invented from scratch.
 
 **Required design work before hardware selection is fully actionable**
-(not yet scoped into an execution plan):
+(now scoped in `docs/EXECUTION_PLAN_2026-08-08_collector-hubs.md`, but not implemented):
 1. Define exactly which services are "edge" vs. "central" (draft above
    is a starting point, not final).
 2. Design the edge→central forwarding mechanism — most likely an MQTT
@@ -1330,10 +1335,10 @@ mechanism, not something invented from scratch.
 (`ilikethelights`) — existing dev machine, not a template recommendation
 for a future stranger's spin-off.
 
-**Not yet done**: none of this has any code, CI, or doc work started —
-this is the corrected planning/ranking pass only. The "required design
-work" list above is a prerequisite to a real execution plan, not
-optional polish.
+**Implementation status:** no collector runtime or central-ingestion code has
+started. The architecture is now scoped in
+`docs/EXECUTION_PLAN_2026-08-08_collector-hubs.md`; its slices and test gates
+are prerequisites to deployment, not optional polish.
 
 **Home is the real pilot for this model — resolved, same day.** User
 confirmed: Home should be "up all the time, get devices online, and then

@@ -438,15 +438,17 @@ it) follow that playbook and report back honestly, including a clean
 failure — this is real, unproven hardware behavior, not something to
 simulate or assume passing.
 
-**Still blocked on real work, not just a decision anymore**: there is no
-collector-only compose profile in this repo — deploying either device
-needs Phase 8's "Required design work" list done first (defining edge
-vs. central services, an MQTT-bridge-over-Tailscale forwarding mechanism,
-making the central brain multi-location-aware as one instance instead of
-today's one-full-stack-per-location model). **Recommend doing the
-USB-Zigbee-on-Termux validation spike immediately** (cheap, fast, no
-dependencies) so the hardware question is settled while the collector/
-central design work happens in parallel — don't block one on the other.
+**Codex update, 2026-08-08:** the architecture prerequisite is now scoped in
+[`docs/EXECUTION_PLAN_2026-08-08_collector-hubs.md`](EXECUTION_PLAN_2026-08-08_collector-hubs.md).
+Runtime implementation has not started. It defines the edge/central boundary,
+location-first MQTT, legacy Cabin compatibility, location-scoped commands,
+one-central-API UI migration, ACLs, tests, and rollback.
+
+A safety defect was found in the original POC before Phase 5: a second Z2M
+instance using Cabin's default `zigbee2mqtt/#` could collide with retained
+state and coordinator controls. Fork commit `b09b7a5` now requires a local
+Phase 4 broker, isolated `poc/home/zigbee2mqtt/#`, and fresh approval before
+Phase 5 touches the M920q. Hardware evidence is still pending.
 
 ---
 

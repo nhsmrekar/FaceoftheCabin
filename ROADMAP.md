@@ -1157,7 +1157,8 @@ ontology_version: "1.0"          # Add this — migration tooling needs a versio
       only recovers it when the broker replays retained `online`. Retained
       `offline`, malformed/non-retained traffic, timeout, or broker disconnect
       does not suppress MISSED. RTSP cameras remain time-based only. Canonical
-      definitions: `z2m_retained_availability` and
+      definitions: existing `mqtt_availability_topic`, new
+      `mqtt_message_retained`, and
       `z2m_retained_availability_probe_result` in `docs/ontology.yaml`.
       Targeted backend tests 17/17; full backend run 81/84 passed, with
       only the 3 pre-existing Docker/Testcontainers tests unable to start

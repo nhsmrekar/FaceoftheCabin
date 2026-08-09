@@ -299,7 +299,10 @@ the user asked for, just scoped to one protocol.
   devices re-subscribe to their authoritative availability topic and only
   recover on retained `online`. Retained `offline`, malformed/non-retained
   traffic, timeout, or broker disconnect does not hide MISSED. The ontology
-  now defines both the raw retained value and normalized probe result.
+  now keeps availability on the existing `mqtt_availability_topic`, defines
+  retained delivery separately as `mqtt_message_retained`, and derives the
+  normalized probe result from both facts. Both new concepts remain candidates
+  until verified against the real M920q broker and devices.
   Targeted backend tests: 17/17. Full backend run: 81/84 passed; the only
   errors were the 3 already-documented Testcontainers tests because Docker
   is unavailable in this environment.

@@ -314,8 +314,9 @@ elements:
     entity_type: owl:DatatypeProperty
     layer: protocol
     primitive: true
-    schema_version: "0.3.0"
+    schema_version: "0.4.0"
     migration_status: complete
+    lifecycle_status: used
     data_class: raw
     data_type: xsd:string
     constraint:
@@ -338,6 +339,9 @@ elements:
       - target: device_state
         type: consumed_by
         cardinality: "1:1"
+      - target: z2m_retained_availability_probe_result
+        type: consumed_by
+        cardinality: "1:N"
     notes: >
       FaceoftheCabin uses this as the primary state signal. Data message
       arrival (linkquality present) is a secondary signal. See
@@ -966,41 +970,39 @@ elements:
       RTSP camera devices still have no active check; that remaining scoped
       gap needs an RTSP connect-and-drop probe.
 
-  - id: z2m_retained_availability
+  - id: mqtt_message_retained
     entity_type: owl:DatatypeProperty
     layer: protocol
     primitive: true
     schema_version: "0.4.0"
     migration_status: complete
-    lifecycle_status: used
-    first_used:
-      date: "2026-08-08"
-      ref: "Zigbee2MQTT <device>/availability retained MQTT topic"
+    lifecycle_status: candidate
     data_class: raw
-    data_type: xsd:string
+    data_type: xsd:boolean
     constraint:
-      enum: [online, offline]
       description: >
-        The last authoritative availability value retained by the MQTT broker
-        for one Zigbee2MQTT device. Retention is required; an ordinary live
-        publish is not proof that an active replay request succeeded.
-    ui_display_name: "Zigbee Availability"
-    source: "zigbee2mqtt/{friendly_name}/availability (MQTT retained message)"
+        true when the MQTT broker delivered this publication from retained
+        storage in response to a subscription; false for ordinary live traffic.
+    ui_display_name: "Retained MQTT Message"
+    source: "Paho MqttMessage.isRetained()"
     rendering:
-      semantic: "Device answered / Device unavailable"
-      systems: "Retained Z2M availability: online | offline"
-      technical: "MqttMessage.isRetained() && payload state online|offline"
+      semantic: (not shown)
+      systems: "Retained replay: Yes / No"
+      technical: "MqttMessage.isRetained(): boolean"
       compliance: (not shown)
     definition: >
-      The raw online-or-offline availability assertion Zigbee2MQTT stores as
-      a retained MQTT message for a device.
+      Whether an MQTT publication was replayed from the broker's retained
+      message store rather than received as ordinary live traffic.
     relationships:
       - target: z2m_retained_availability_probe_result
         type: consumed_by
         cardinality: "1:N"
     notes: >
-      This value is not itself checkin status. Its retained flag and arrival
-      in response to a fresh subscription are part of the evidence contract.
+      This is transport metadata, not device availability. The availability
+      value remains defined by mqtt_availability_topic. For the Z2M liveness
+      probe, both facts are required: retained=true and availability=online.
+      Candidate until verified against the real M920q broker; unit tests alone
+      do not establish lifecycle_status used or first_verified_live.
 
   - id: z2m_retained_availability_probe_result
     entity_type: owl:DatatypeProperty
@@ -1008,10 +1010,7 @@ elements:
     primitive: false
     schema_version: "0.4.0"
     migration_status: complete
-    lifecycle_status: used
-    first_used:
-      date: "2026-08-08"
-      ref: "Zigbee2MqttAdapter.probeRetainedAvailability()"
+    lifecycle_status: candidate
     data_class: derived
     data_type: xsd:string
     constraint:
@@ -1033,15 +1032,21 @@ elements:
       The normalized result of actively asking the MQTT broker to replay one
       Zigbee device's retained authoritative availability value.
     relationships:
-      - target: z2m_retained_availability
+      - target: mqtt_message_retained
         type: derives_from
-        cardinality: "N:1"
+        cardinality: "1:1"
+      - target: mqtt_availability_topic
+        type: derives_from
+        cardinality: "1:1"
       - target: device_checkin_status
         type: consumed_by
         cardinality: "1:N"
     notes: >
       Fail closed: only ONLINE may recover a stale device. OFFLINE and
-      NO_REPLY never suppress LATE or MISSED classification.
+      NO_REPLY never suppress LATE or MISSED classification. Per the product
+      owner's 2026-08-08 ontology decision, retained online is accepted as
+      active reachability confirmation. Candidate until verified against the
+      real M920q broker and devices.
 
   - id: linkquality
     entity_type: owl:DatatypeProperty

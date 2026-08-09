@@ -613,14 +613,12 @@ mean UX-wise, not just a wiring change.
   production/physical-device validation is still absent, metric selection
   and distinct density modes remain unbuilt, and the surrounding app shell
   horizontally clips its toolbar/action row at 390px. Those are the actual
-  open follow-ups now, not "no browser verification."
+  open follow-ups now, not "no browser verification." A corrected-schema
+  rerun using the backend's real `{value,label}` presence-option shape had no
+  console errors.
 - **`AddPlaceForm` (new, `6dbbadc`) browser verification completed
   2026-08-09** — the isolated local end-to-end result is recorded under Item
   3; this is no longer an open verification item.
-- **`PresenceToggle` emits React's missing-list-key warning** — observed in
-  the same 2026-08-09 local browser run. The control rendered and the warning
-  did not block Item 3, but its option mapping should receive stable keys and
-  a console-clean regression check in a separate UI maintenance slice.
 
 ---
 

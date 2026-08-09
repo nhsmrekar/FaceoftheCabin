@@ -240,7 +240,13 @@ accumulate.*
   armed-away. Deliberate MVP scope cut (see that entity's `notes`), not
   forgotten — both signals are now real and live as of 2026-08-08
   (`cabin/security/armed_away`, `cabin/presence/*`), so this is now
-  purely a wiring task, not blocked on missing data anymore.
+  a design-and-wiring task, not blocked on missing data anymore. The
+  separate Frigate ingestion bypass was repaired in the fork on 2026-08-09:
+  admitted rich detection events now use the canonical classifier over the
+  raw `after` map, while unadmitted cameras remain unable to publish (33/33
+  focused classifier/bridge tests; full backend 119/122 with only the same
+  three Docker/Testcontainers startup errors). This does not resolve the
+  context-aware severity item itself.
 - **Liebherr fridge / Bosch dishwasher account linking** — both need the
   user's own account credentials (SmartDevice login; a Home Connect
   Developer OAuth client_id/secret + account consent). See

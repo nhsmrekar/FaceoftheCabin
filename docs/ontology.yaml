@@ -1857,7 +1857,7 @@ elements:
     entity_type: owl:DatatypeProperty
     layer: backend
     primitive: false
-    schema_version: "0.3.0"
+    schema_version: "0.3.1"
     migration_status: complete
     data_class: derived
     data_type: xsd:string
@@ -1875,11 +1875,15 @@ elements:
       technical: severity field on CabinEvent
       compliance: Alert Severity Classification
     definition: >
-      The severity tier assigned to a CabinEvent at publish time, computed
-      from the triggering message's raw attributes by
-      AlertSeverityClassifier. CRITICAL = water_leak/smoke/alarm true.
-      WARN = tamper true, battery_low true, or contact false (door open).
-      Everything else is INFO.
+      The severity tier assigned to a CabinEvent at publish time. Raw-
+      attribute integration paths (generic MQTT device telemetry,
+      Zigbee2MQTT telemetry, and Frigate detection events) compute it from
+      the triggering message's attributes through AlertSeverityClassifier.
+      CRITICAL = water_leak/smoke/alarm true. WARN = tamper true,
+      battery_low true, or contact false (door open). Everything else is
+      INFO. Frigate motion messages contain no rich detection attribute map
+      and remain INFO; the separately admitted direct-event channel carries
+      the explicit severity in its topic rather than reclassifying it.
     relationships:
       - target: device_state
         type: complements
@@ -1907,6 +1911,14 @@ elements:
       default — no-op until an operator sets a real topic in infra/.env,
       never committed). WARN events are not pushed to avoid paging for
       every open door.
+
+      IMPLEMENTATION CORRECTION 2026-08-09: Frigate detection ingestion had
+      bypassed this entity's canonical derivation and hardcoded INFO. It now
+      calls AlertSeverityClassifier.classify(after), where after is
+      Frigate's raw tracked-object attribute map, only after the camera
+      source passes catalog admission. This repairs severity lineage without
+      adding camera-specific rules or the still-separate armed/presence
+      context design.
 
   - id: temperature_celsius
     entity_type: owl:DatatypeProperty
@@ -2209,7 +2221,7 @@ elements:
     entity_type: owl:Class
     layer: backend
     primitive: false
-    schema_version: "0.4.0"
+    schema_version: "0.4.1"
     migration_status: complete
     lifecycle_status: used
     first_used:
@@ -2241,9 +2253,12 @@ elements:
       - target: platform_secret
         type: depends_on
         cardinality: "N:1" # CAMERA_PASSWORD gates the RTSP source Frigate reads from
+      - target: event_severity
+        type: depends_on
+        cardinality: "N:1"
     relates_to:
       ui_components: [] # Phase 3/4 (cabin-ui events panel, Family Hub public widget) not yet built
-      elements: []
+      elements: [event_severity]
     notes: >
       BUILT 2026-08-02. MqttBridgeService's camera-topic handling was
       rewritten in the same pass — the previous version JSON-parsed every
@@ -2254,6 +2269,14 @@ elements:
       MQTT publish to the M920q's own mosquitto broker, round-tripped
       through Kafka and Postgres, confirmed via direct SQL query and the
       live API response, not just "no exception was thrown."
+
+      SEVERITY LINEAGE CORRECTION 2026-08-09: rich Frigate detection events
+      are classified from the raw after map through event_severity's
+      AlertSeverityClassifier contract after source admission; they no
+      longer receive an unconditional INFO literal. Motion events remain
+      INFO because their plain-text ON/OFF topic supplies no rich attribute
+      map. Armed/presence-aware escalation and confidence-threshold semantics
+      remain explicitly outside this correction.
 
       Two unrelated infrastructure bugs were found and fixed getting this
       working, not specific to this feature but blocking it entirely:

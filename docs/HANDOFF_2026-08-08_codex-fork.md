@@ -20,8 +20,9 @@
 > work done on Item 1 (device checkin-status tiering) and Item 4 (the
 > Rules & Alerts location-split, both sub-items now done); then, in a
 > follow-up planning-only round, added a new Item 6 (armed-state trigger
-> gap + native camera-confidence UI — includes a real bug find, not yet
-> fixed) and a hardware-tier framework for Item 5 (`ROADMAP.md`'s new
+> gap + native camera-confidence UI — its first isolated classifier-bypass
+> defect is fixed in this fork; the larger design remains open) and a
+> hardware-tier framework for Item 5 (`ROADMAP.md`'s new
 > Phase 8) — **which the user then corrected**: not full-stack-per-device,
 > but a lightweight local collector routing to a central "main brain."
 > Phase 8 was rewritten accordingly, and the user then confirmed Home
@@ -263,8 +264,9 @@ still open within that item.
 ## 3. Open work items — from the user's most recent request, in their words
 
 The user's last substantive request before the usage-limit/handoff
-message was a 5-part "big things right now" list. **None of these five
-have been started.** Full context for each:
+message was a 5-part "big things right now" list. The statuses below are
+kept current by the fork; several items now have completed slices while
+their explicitly named remainders stay open. Full context for each:
 
 ### Item 1 — Device state semantics are misleading — PARTIALLY DONE
 
@@ -398,13 +400,15 @@ cabin-ui production build pass. Full backend is 117/120 with zero assertion
 failures; only the same three Docker/Testcontainers classes fail to start. This
 fork has not been deployed or tested across the real production origins.
 
-### Item 3 — No UI to add additional "My Places"
+### Item 3 — No UI to add additional "My Places" — DONE
 
-**Resolved this session** — `AddPlaceForm` shipped in `6dbbadc` (see §2).
-The user asked for this "earlier, but still don't see" it, so verify it
-actually renders and works for them before considering this fully closed
-— it has Vitest coverage but has **not been visually verified in a real
-browser** (no browser tool was available this session — see §4).
+`AddPlaceForm` shipped in `6dbbadc` (see §2). On 2026-08-09 the fork was
+verified in a real local browser against an isolated mock API: My Places
+rendered behind the app-wide authenticated gate, the form opened with ID and
+Display Name required and connection URLs optional, a synthetic `POST
+/api/locations` succeeded, the page reloaded, and the new undeployed place
+appeared in both the location switcher and card grid. This closes the prior
+browser-verification caveat; production deployment remains separately gated.
 
 ### Item 4 — Places-based Rules & Alerts context, per-location Node-RED — DONE
 
@@ -545,16 +549,17 @@ first:**
   control exists anywhere in cabin-ui; the actual toggle is
   `input_boolean.cabin_security_armed_away` in Home Assistant. One global
   boolean — no zones, no granular arming.
-- **Real bug, found this session, not previously known:**
-  `MqttBridgeService.handleFrigateDetectionEvent()` hardcodes every
-  Frigate detection to `"INFO"` severity — it never reaches
-  `AlertSeverityClassifier`, so no Frigate detection can become WARN/
-  CRITICAL or trigger `NtfyAlertPublisher` through this app's own event
-  pipeline, regardless of content. Same bug class as the
-  `Zigbee2MqttAdapter` fix from 2026-08-06 — that fix missed this call
-  site. **This should probably be the first fix if this item is picked
-  up** — it's a small, isolated, clearly-scoped bug fix, unlike the rest
-  of this item which is real design work.
+- **First isolated defect fixed in this fork, 2026-08-09:**
+  `MqttBridgeService.handleFrigateDetectionEvent()` had hardcoded every
+  Frigate detection to `"INFO"` severity and bypassed
+  `AlertSeverityClassifier`. It now classifies Frigate's raw `after`
+  attribute map after camera-source admission. Regression coverage proves
+  an admitted `alarm:true` detection becomes CRITICAL while an unadmitted
+  critical-looking camera payload remains only an AVAILABLE candidate and
+  cannot allocate runtime state or publish. Focused classifier/bridge tests:
+  33/33. Full backend: 119/122 with zero assertion failures; only the same
+  three Docker/Testcontainers classes could not start. No production
+  deployment or live Frigate event was attempted.
 - `AlertSeverityClassifier.java` still explicitly doesn't consider armed/
   presence state (unchanged deliberate MVP scope cut).
 - A **separate, working alert path already exists but is invisible from
@@ -569,9 +574,9 @@ first:**
   Events (`label (87%)`), but there's no live, confidence-threshold-
   configurable functional-state tile anywhere yet.
 
-**Full scope, not yet an execution plan** — see `ROADMAP.md`'s new Phase
-7 punch-list item for the five-part breakdown (fix the INFO-hardcoding
-bug; wire armed+presence into the classifier; decouple presence/door
+**Remaining scope is still not yet an execution plan** — see `ROADMAP.md`'s
+Phase 7 punch-list item for the five-part breakdown (the INFO-hardcoding
+bug is done; wire armed+presence into the classifier; decouple presence/door
 watching from the single global armed toggle so it can run even when
 "not all" is armed, per the user's explicit ask; surface the Node-RED
 overnight-alert logic as a real cabin-ui control instead of an embedded
@@ -610,8 +615,13 @@ mean UX-wise, not just a wiring change.
   a follow-up in `ROADMAP.md` and `docs/DEFINITION_OF_DONE.md`'s punch
   list already — if Codex has browser/preview tooling available, this is
   a good candidate to actually close out.
-- **`AddPlaceForm` (new, `6dbbadc`) likewise not visually verified** —
-  same caveat as above, same recommendation if tooling allows it.
+- **`AddPlaceForm` (new, `6dbbadc`) browser verification completed
+  2026-08-09** — the isolated local end-to-end result is recorded under Item
+  3; this is no longer an open verification item.
+- **`PresenceToggle` emits React's missing-list-key warning** — observed in
+  the same 2026-08-09 local browser run. The control rendered and the warning
+  did not block Item 3, but its option mapping should receive stable keys and
+  a console-clean regression check in a separate UI maintenance slice.
 
 ---
 

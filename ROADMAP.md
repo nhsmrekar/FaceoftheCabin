@@ -720,12 +720,16 @@ ontology_version: "1.0"          # Add this — migration tooling needs a versio
       assumed. cabin-ui merges it into the existing `LOCATIONS` object on
       load — verified live against a stub API returning a third, fictional
       location ("Lake House"), which correctly appeared in both the
-      location switcher and the My Places grid. **Not done**: ~30 other
+      location switcher and the My Places grid. The later Add Place UI was
+      also verified end-to-end in a real local browser on 2026-08-09: a
+      synthetic `POST /api/locations` survived the form-triggered reload and
+      appeared in both views. **Not done**: ~30 other
       call sites in App.jsx (presence, alerts, health polling) still
       hardcode `LOCATIONS.cabin`/`.home` directly and assume exactly those
       two keys exist — genuinely making every feature N-location-aware,
-      an admin UI for add/edit (the reorder endpoint exists, unused by any
-      UI yet), and wiring per-location Grafana dashboards to this table
+      an admin UI for editing existing locations (the reorder endpoint
+      exists, unused by any UI yet), and wiring per-location Grafana
+      dashboards to this table
       are the real remainder, not silently dropped — see
       `docs/ontology.yaml`'s `hub_location` entry. A real
       `HubLocationServiceTest` (Testcontainers-against-Postgres, same
@@ -1133,7 +1137,9 @@ ontology_version: "1.0"          # Add this — migration tooling needs a versio
       later via `PATCH /api/locations/{id}`, same endpoint the live
       `hub_locations` URL fix used this session). 7 new frontend tests
       (form validation, POST body shape, server-error surfacing, label
-      logic). Full suite: 52/52.
+      logic). Full suite: 52/52. Real local-browser verification completed
+      2026-08-09 against an isolated mock API: the form rendered, submitted a
+      synthetic location, reloaded, and showed it in the switcher and grid.
 - [x] **"Offline" was misleading — didn't distinguish "hasn't reported
       yet" from "actually unreachable"** (user report, 2026-08-08, verbatim
       in `docs/ontology.yaml`'s new `device_checkin_status` entity). Added
@@ -1234,14 +1240,16 @@ ontology_version: "1.0"          # Add this — migration tooling needs a versio
         deliberate scope cut") — confirmed still true, not wired despite
         both signals being live since 2026-08-08 (see
         `docs/DEFINITION_OF_DONE.md`'s punch list, unchanged item).
-      - **Real bug found this session, not previously known**:
-        `MqttBridgeService.handleFrigateDetectionEvent()` hardcodes every
-        Frigate detection to `"INFO"` severity — it never reaches
-        `AlertSeverityClassifier` at all, so no Frigate detection can ever
-        become WARN/CRITICAL or trigger `NtfyAlertPublisher` through this
-        app's own event pipeline, regardless of content or armed state.
-        This is the same class of bug fixed for `Zigbee2MqttAdapter` on
-        2026-08-06 — that fix apparently didn't cover this call site.
+      - **[DONE IN FORK 2026-08-09] First isolated classifier-bypass fix**:
+        `MqttBridgeService.handleFrigateDetectionEvent()` no longer hardcodes
+        every Frigate detection to `"INFO"`; after catalog admission it feeds
+        Frigate's raw `after` attributes through `AlertSeverityClassifier`.
+        Regression coverage proves an admitted `alarm:true` detection becomes
+        CRITICAL while an unadmitted critical-looking camera payload remains
+        AVAILABLE-only and cannot allocate runtime state or publish. Focused
+        classifier/bridge tests: 33/33. Full backend: 119/122 with zero
+        assertion failures; only the same three Docker/Testcontainers classes
+        could not start. No live deployment was attempted.
       - A **separate, working mechanism already exists but is invisible
         from cabin-ui**: Node-RED's "Camera Overnight Alerts" flow (see
         `docs/MAINTENANCE.md`) already gates Frigate alert-tier
@@ -1254,17 +1262,16 @@ ontology_version: "1.0"          # Add this — migration tooling needs a versio
         Frigate's own `score` field is already captured in the event
         payload and shown per-event in Camera Events (`label (87%)`), but
         never as a live, configurable-threshold functional-state tile.
-      **What this needs** (not yet scoped into an execution plan): (1)
-      fix the hardcoded-INFO bug so Frigate detections actually reach the
-      classifier; (2) wire armed+presence into
+      **What remains** (not yet scoped into an execution plan): (1) wire
+      armed+presence into
       `AlertSeverityClassifier` (the "purely a wiring task" already
-      flagged as ready); (3) decouple "presence/door watching" from the
+      flagged as ready); (2) decouple "presence/door watching" from the
       single global armed toggle — likely a second, independent state
       distinct from full security-arming — so cameras/doors can alert
       even when "all" automations aren't armed, per the user's explicit
-      ask; (4) surface Node-RED's existing overnight-alert logic (or its
+      ask; (3) surface Node-RED's existing overnight-alert logic (or its
       replacement) as a real cabin-ui control, not an embedded editor tab;
-      (5) a native confidence-threshold-configurable functional-state UI
+      (4) a native confidence-threshold-configurable functional-state UI
       for camera/presence detection, extending `CameraHealthPanel` rather
       than replacing it. See `docs/HANDOFF_2026-08-08_codex-fork.md`'s
       Item 6 for the full framing if picked up on the fork.

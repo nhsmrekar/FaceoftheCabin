@@ -8,6 +8,7 @@ import com.cabin.orchestrator.devices.model.DeviceCapability;
 import com.cabin.orchestrator.devices.model.DeviceDescriptor;
 import com.cabin.orchestrator.devices.model.DeviceStatus;
 import com.cabin.orchestrator.devices.model.DeviceType;
+import com.cabin.orchestrator.events.CabinEvent;
 import com.cabin.orchestrator.kafka.EventPublisher;
 import com.cabin.orchestrator.presence.PresenceProfile;
 import com.cabin.orchestrator.presence.PresenceService;
@@ -16,6 +17,7 @@ import com.cabin.orchestrator.security.SecurityStateRegistry;
 import org.eclipse.paho.client.mqttv3.MqttMessage;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.time.Instant;
@@ -24,6 +26,7 @@ import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static com.cabin.orchestrator.devices.catalog.DeviceCatalogTestSupport.authorize;
 
@@ -164,6 +167,35 @@ class MqttBridgeServiceTest {
 
         assertNull(registry.get("available"),
             "the bridge-wide availability topic must never be registered as a camera device");
+    }
+
+    @Test
+    void authorizedFrigateDetectionUsesCanonicalSeverityClassifier() throws Exception {
+        authorizeCamera("driveway");
+
+        deliver("cabin/camera/events", """
+            {"type":"new","after":{"id":"evt-critical","camera":"driveway",
+            "label":"person","score":0.91,"alarm":true}}
+            """);
+
+        ArgumentCaptor<CabinEvent> event = ArgumentCaptor.forClass(CabinEvent.class);
+        verify(eventPublisher).publish(event.capture());
+        assertEquals("DETECTION_NEW", event.getValue().eventType());
+        assertEquals("CRITICAL", event.getValue().severity(),
+            "Frigate detections must use event_severity, not a hardcoded INFO literal");
+    }
+
+    @Test
+    void unadmittedFrigateDetectionCannotPublishEvenWhenPayloadClassifiesCritical() throws Exception {
+        deliver("cabin/camera/events", """
+            {"type":"new","after":{"camera":"neighbor-camera",
+            "label":"person","alarm":true}}
+            """);
+
+        assertNull(registry.get("neighbor-camera"));
+        assertEquals("AVAILABLE", catalog.candidateForObservation(
+            "FRIGATE_CAMERA", "cabin/camera/neighbor-camera").orElseThrow().disposition().name());
+        verifyNoInteractions(eventPublisher);
     }
 
     @Test

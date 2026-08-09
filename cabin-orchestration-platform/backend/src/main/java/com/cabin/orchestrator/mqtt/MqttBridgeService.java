@@ -339,7 +339,7 @@ public class MqttBridgeService implements MqttCallback {
             CabinEvent event = new CabinEvent(
                 UUID.randomUUID().toString(), authorizedCameraId.get(),
                 "DETECTION_" + type.toUpperCase(),
-                "INFO", Instant.now(), eventPayload);
+                AlertSeverityClassifier.classify(after), Instant.now(), eventPayload);
             eventPublisher.publish(event);
         } catch (Exception e) {
             log.warn("Failed to parse Frigate detection event: {}", e.getMessage());

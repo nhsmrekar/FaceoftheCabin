@@ -7,10 +7,10 @@ import java.util.Map;
  * the "INFO" literal MqttBridgeService and Zigbee2MqttAdapter both used to
  * pass to every CabinEvent regardless of payload content.
  *
- * MVP rule set only — no armed/presence awareness yet (that's a deliberate
- * fast-follow, not an oversight: it depends on Node-RED's own
- * cabin/security/node_red_armed state, which has a known cold-start race,
- * and shouldn't gate this classifier's rollout).
+ * MVP rule set only — no armed/presence awareness yet. Those live signals are
+ * separate ontology concepts with distinct unknown states and require their
+ * own explicit severity design; they must not be smuggled into this raw-
+ * attribute classifier as an incidental call-site behavior.
  */
 public final class AlertSeverityClassifier {
 

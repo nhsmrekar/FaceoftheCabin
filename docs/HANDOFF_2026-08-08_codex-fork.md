@@ -345,6 +345,24 @@ add/edit/remove calls now fail closed rather than bypassing the lifecycle.
   real enabled camera from the running backend. Targeted RTSP/monitor tests:
   16/16. Full backend run: 87/90; only the same 3 Docker/Testcontainers tests
   failed to start because Docker is unavailable.
+- **LATE/MISSED cards now have a real `Check now` action** — implemented
+  2026-08-09 in Device Manager detail and ordinary Monitoring KPI tiles.
+  The authenticated POST runs the strongest ontology-approved bounded check
+  for Zigbee, Home Assistant, or RTSP and returns a truthful REACHABLE /
+  REPORTED_OFFLINE / NO_REPLY / UNSUPPORTED result. Only REACHABLE recovers
+  ON_SCHEDULE. Cards disclose possible additional battery use without claiming
+  a sleeping Zigbee device can be forced awake, and every completed attempt is
+  appended to `device_audit_log` with actor/outcome/detail/time and returned as
+  a visible receipt ID. This also fixed retained-online recovery failing to
+  refresh `lastSeen`, plus normal KPI tiles showing raw state instead of their
+  LATE/MISSED label. Runtime projections and action eligibility now re-check
+  current catalog authority on every read/action; a post-registration disable
+  or revoke immediately suppresses cards, state, commands, and probes. Focused
+  backend 21/21, ontology contract 1/1, UI 71/71, UI build passed; full backend
+  127/130 with only the same three Docker startup
+  errors. Isolated browser verification covered success/no-reply, both card
+  surfaces, 390x844 layout, and a clean fresh-tab console. No M920q/device
+  verification or deployment was attempted.
 - **Not yet verified against the real M920q backend with real devices**
   — only verified in a browser preview with the backend unreachable
   (graceful-degradation path only) and via unit/integration tests. Watch
@@ -575,16 +593,19 @@ first:**
   configurable functional-state tile anywhere yet.
 
 **Remaining scope is still not yet an execution plan** — see `ROADMAP.md`'s
-Phase 7 punch-list item for the five-part breakdown (the INFO-hardcoding
-bug is done; wire armed+presence into the classifier; decouple presence/door
-watching from the single global armed toggle so it can run even when
-"not all" is armed, per the user's explicit ask; surface the Node-RED
-overnight-alert logic as a real cabin-ui control instead of an embedded
-editor tab; build the native confidence-threshold UI). Recommend doing
-the INFO-hardcoding bug fix first (isolated, testable, low-risk) before
-attempting the larger armed/presence-decoupling design work, which needs
-real product thinking about what "watching without being armed" should
-mean UX-wise, not just a wiring change.
+Phase 7 punch-list item. The INFO-hardcoding bug is done; wiring context into
+the classifier, a native Node-RED overnight-alert replacement/control, and the
+confidence-threshold UI remain open. The previously unresolved product meaning
+is now decided and canonical in `docs/ontology.yaml`: `monitoring_scope` is a
+per-location state separate from armed state, configured as OFF / PERIMETER /
+FULL; missing is UNKNOWN/not configured, never implicit OFF. PERIMETER covers
+boundary doors/exterior cameras, FULL also covers conforming interior sources.
+Intrinsic hazards remain CRITICAL. Under active monitoring, armed or reliably
+unoccupied qualifying events become CRITICAL; occupied+disarmed retains base
+severity; unknown/stale/conflicting armed or presence context is visible and
+auditable WARN `context unknown`, not a confirmed-intrusion CRITICAL push.
+Only authenticated auditable application authority may set scope, and no
+outside/unadmitted/nonconforming source can do so.
 
 ---
 

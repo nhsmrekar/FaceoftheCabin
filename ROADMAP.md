@@ -1213,6 +1213,34 @@ ontology_version: "1.0"          # Add this — migration tooling needs a versio
       grandfathering defect. The legacy Device Manager add/edit/remove calls
       now return a conflict directing callers to the lifecycle workflow rather
       than bypassing it.
+      **Recovery-action follow-on, 2026-08-09:** LATE and MISSED cards now
+      expose a real authenticated `Check now` action in both Device Manager
+      detail and ordinary Monitoring KPI tiles. `POST /api/devices/{id}/
+      check-now` re-reads current liveness before spending network work, then
+      executes the strongest bounded adapter check already authorized by the
+      ontology: retained authoritative Zigbee availability, a real Home
+      Assistant fetch, or RTSP socket reachability. Results distinguish
+      REACHABLE, REPORTED_OFFLINE, NO_REPLY, and UNSUPPORTED; only REACHABLE
+      returns the device to ON_SCHEDULE. Sleeping battery Zigbee devices are
+      not falsely promised a remote wake. Cards disclose that checking can use
+      additional battery (definite when battery telemetry exists, conditional
+      when power source is unknown) and show an append-only, authenticated
+      `device_audit_log` receipt ID after each completed attempt. The slice also
+      fixed two adjacent truthfulness defects found during verification:
+      accepted retained-online evidence now refreshes `lastSeen`/restores the
+      pre-MISSED state instead of going stale again next cycle, and normal KPI
+      tiles now display `Late checking in` / `Not responding` rather than a raw
+      state that contradicted their action. Runtime projections and action
+      eligibility now re-check catalog authority on every read/action, so a
+      post-registration disable or revoke immediately suppresses cards, state,
+      commands, and probes without waiting for the next monitor pass. Focused
+      backend: 21/21; ontology
+      contract: 1/1; cabin-ui: 71/71; production UI build passed. Full backend:
+      127/130 with zero assertion failures and only the same three unavailable-
+      Docker Testcontainers startup errors. Isolated local-browser verification
+      exercised REACHABLE and NO_REPLY receipts, Device Manager detail, and a
+      390x844 viewport with no horizontal overflow and a clean fresh-tab
+      console. Real M920q/device verification and deployment remain unattempted.
 - [x] **Rules & Alerts always showed one Node-RED regardless of location
       context** (user report, 2026-08-08, verbatim: "I only see one node
       red... same context shift behavior for all locations"). `RulesPanel`
@@ -1278,6 +1306,18 @@ ontology_version: "1.0"          # Add this — migration tooling needs a versio
       for camera/presence detection, extending `CameraHealthPanel` rather
       than replacing it. See `docs/HANDOFF_2026-08-08_codex-fork.md`'s
       Item 6 for the full framing if picked up on the fork.
+      **Ontology/product ruling recorded 2026-08-09; implementation remains
+      open:** the independent per-location axis is `monitoring_scope` with
+      configured values OFF / PERIMETER / FULL; a missing row is UNKNOWN/not
+      configured and never silently OFF. PERIMETER covers boundary doors and
+      exterior cameras; FULL additionally covers conforming interior sources.
+      Intrinsic smoke/alarm/water-leak hazards remain CRITICAL in every scope.
+      Under active monitoring, armed or reliably unoccupied qualifying
+      person/door events become CRITICAL; reliably occupied plus disarmed keeps
+      base severity; unknown/stale/conflicting armed or presence context becomes
+      visible/auditable WARN `context unknown`, not a confirmed-intrusion push.
+      Scope changes require authenticated auditable authority; outside or
+      nonconforming devices cannot set it.
 
 ### Phase 8 — Accessible Hardware Program: Local Collector Hubs (planning only, 2026-08-08)
 

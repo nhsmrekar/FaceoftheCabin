@@ -2,14 +2,18 @@ package com.cabin.orchestrator.api;
 
 import com.cabin.orchestrator.devices.DeviceHealthMonitor;
 import com.cabin.orchestrator.devices.DeviceRegistry;
+import com.cabin.orchestrator.devices.audit.DeviceAuditRecord;
+import com.cabin.orchestrator.devices.audit.DeviceAuditService;
 import com.cabin.orchestrator.devices.display.DeviceDisplayConfig;
 import com.cabin.orchestrator.devices.display.DeviceDisplayConfigService;
 import com.cabin.orchestrator.devices.model.DeviceDescriptor;
+import com.cabin.orchestrator.devices.model.DeviceLivenessCheckResult;
 import com.cabin.orchestrator.devices.model.DeviceStatus;
 import com.cabin.orchestrator.devices.model.DeviceType;
 import com.cabin.orchestrator.devices.model.DeviceCapability;
 import com.cabin.orchestrator.integrations.zigbee.Zigbee2MqttAdapter;
 import com.cabin.orchestrator.security.DeviceLifecycleAccessPolicy;
+import com.cabin.orchestrator.security.GoogleAuthInterceptor;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
@@ -32,17 +36,20 @@ public class DeviceController {
     private final DeviceHealthMonitor healthMonitor;
     private final DeviceDisplayConfigService displayConfigService;
     private final DeviceLifecycleAccessPolicy lifecycleAccessPolicy;
+    private final DeviceAuditService auditService;
 
     public DeviceController(DeviceRegistry registry,
                              Zigbee2MqttAdapter z2mAdapter,
                              DeviceHealthMonitor healthMonitor,
                              DeviceDisplayConfigService displayConfigService,
-                             DeviceLifecycleAccessPolicy lifecycleAccessPolicy) {
+                             DeviceLifecycleAccessPolicy lifecycleAccessPolicy,
+                             DeviceAuditService auditService) {
         this.registry = registry;
         this.z2mAdapter = z2mAdapter;
         this.healthMonitor = healthMonitor;
         this.displayConfigService = displayConfigService;
         this.lifecycleAccessPolicy = lifecycleAccessPolicy;
+        this.auditService = auditService;
     }
 
     /** List all registered devices with their current state */
@@ -67,6 +74,37 @@ public class DeviceController {
         Map<String, String> out = new LinkedHashMap<>();
         healthMonitor.getCheckinStatuses().forEach((id, status) -> out.put(id, status.name()));
         return out;
+    }
+
+    /**
+     * Execute the strongest available adapter-specific liveness check for a
+     * device that is currently LATE or MISSED. Device writes are authenticated
+     * by GoogleAuthInterceptor; DeviceHealthMonitor and DeviceRegistry preserve
+     * the stricter operational-authority boundary before any probe is run.
+     */
+    @PostMapping("/{deviceId}/check-now")
+    public DeviceLivenessCheckResult checkNow(@PathVariable String deviceId,
+                                               HttpServletRequest request) {
+        try {
+            DeviceLivenessCheckResult result = healthMonitor.checkNow(deviceId);
+            DeviceAuditRecord receipt = auditService.record(
+                result.deviceId(), result.action(), authenticatedActor(request),
+                result.outcome().name(), result.message());
+            return result.withReceiptId(receipt.id());
+        } catch (IllegalArgumentException e) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, e.getMessage());
+        } catch (IllegalStateException e) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, e.getMessage());
+        }
+    }
+
+    private String authenticatedActor(HttpServletRequest request) {
+        Object raw = request.getAttribute(GoogleAuthInterceptor.REQUEST_ATTR_EMAIL);
+        String actor = raw == null ? "" : String.valueOf(raw).trim();
+        // The only supported live route reaches here through
+        // GoogleAuthInterceptor. This explicit marker keeps local verification
+        // attributable when that interceptor is deliberately disabled.
+        return actor.isBlank() ? "local-auth-disabled" : actor;
     }
 
     /** Register a new device (Device Manager UI → add device) */

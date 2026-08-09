@@ -2,6 +2,7 @@ package com.cabin.orchestrator.devices;
 
 import com.cabin.orchestrator.devices.model.CheckinStatus;
 import com.cabin.orchestrator.devices.model.DeviceDescriptor;
+import com.cabin.orchestrator.devices.model.DeviceLivenessCheckResult;
 import com.cabin.orchestrator.devices.model.DeviceStatus;
 import com.cabin.orchestrator.integrations.zigbee.Zigbee2MqttAdapter;
 import org.slf4j.Logger;
@@ -94,7 +95,8 @@ public class DeviceHealthMonitor {
                 continue;
             }
 
-            if (tryActiveRecovery(id, descriptor, now)) {
+            ActiveCheckAttempt activeCheck = performActiveCheck(id, descriptor, now);
+            if (activeCheck.outcome() == DeviceLivenessCheckResult.Outcome.REACHABLE) {
                 checkinStatuses.put(id, CheckinStatus.ON_SCHEDULE);
                 recoverIfNeeded(id, "active check confirmed it's actually reachable");
                 continue;
@@ -134,20 +136,37 @@ public class DeviceHealthMonitor {
      * MQTT for a retained authoritative availability replay and only accepts
      * an explicit ONLINE result; OFFLINE and NO_REPLY fail closed.
      */
-    private boolean tryActiveRecovery(String id, Optional<DeviceDescriptor> descriptor, Instant now) {
+    private ActiveCheckAttempt performActiveCheck(String id, Optional<DeviceDescriptor> descriptor, Instant now) {
         String adapterType = descriptor.map(DeviceDescriptor::protocolAdapter).orElse("unknown");
         if ("mqtt".equals(adapterType) && id.startsWith("z2m-")) {
-            return z2mAdapter.probeRetainedAvailability(
+            Optional<Boolean> availability = z2mAdapter.probeRetainedAvailability(
                 descriptor.map(DeviceDescriptor::connectionString).orElse(""),
-                MQTT_AVAILABILITY_TIMEOUT).orElse(false);
+                MQTT_AVAILABILITY_TIMEOUT);
+            if (availability.isEmpty()) {
+                return new ActiveCheckAttempt(DeviceLivenessCheckResult.Outcome.NO_REPLY,
+                    "No retained authoritative availability reply was received.");
+            }
+            if (!availability.get()) {
+                return new ActiveCheckAttempt(DeviceLivenessCheckResult.Outcome.REPORTED_OFFLINE,
+                    "The Zigbee availability source still reports this device offline.");
+            }
+            refreshAfterReachableProbe(id, now);
+            return new ActiveCheckAttempt(DeviceLivenessCheckResult.Outcome.REACHABLE,
+                "The Zigbee availability source reports this device online.");
         }
-        if (!"ha_rest".equals(adapterType) && !"rtsp".equals(adapterType)) return false;
+        if (!"ha_rest".equals(adapterType) && !"rtsp".equals(adapterType)) {
+            return new ActiveCheckAttempt(DeviceLivenessCheckResult.Outcome.UNSUPPORTED,
+                "This device can only recover when it sends its next scheduled report.");
+        }
 
         Optional<DeviceStatus> live = registry.activeFetch(id);
-        if (live.isEmpty()) return false;
+        if (live.isEmpty()) {
+            return new ActiveCheckAttempt(DeviceLivenessCheckResult.Outcome.NO_REPLY,
+                "No response was received from the active device check.");
+        }
 
         DeviceStatus fresh = live.get();
-        Map<String, Object> freshAttributes = fresh.attributes();
+        Map<String, Object> freshAttributes = new LinkedHashMap<>(fresh.attributes());
         if ("rtsp".equals(adapterType)) {
             DeviceStatus existing = registry.get(id);
             Map<String, Object> merged = new LinkedHashMap<>();
@@ -155,10 +174,76 @@ public class DeviceHealthMonitor {
             merged.putAll(fresh.attributes());
             freshAttributes = merged;
         }
+        freshAttributes.remove("staleSince");
+        freshAttributes.remove("lastKnownState");
         registry.update(new DeviceStatus(
             id, fresh.type(), fresh.name(), fresh.state(), now, freshAttributes, fresh.location()));
-        return true;
+        return new ActiveCheckAttempt(DeviceLivenessCheckResult.Outcome.REACHABLE,
+            "rtsp".equals(adapterType)
+                ? "The configured camera endpoint accepted an RTSP-port connection."
+                : "Home Assistant returned a current state for this device.");
     }
+
+    private void refreshAfterReachableProbe(String id, Instant now) {
+        DeviceStatus existing = registry.get(id);
+        if (existing == null) return;
+        Map<String, Object> attributes = new LinkedHashMap<>(existing.attributes());
+        attributes.remove("staleSince");
+        attributes.remove("lastKnownState");
+        String recoveredState = "OFFLINE".equals(existing.state())
+            ? lastKnownState.getOrDefault(id, "ONLINE")
+            : existing.state();
+        registry.update(new DeviceStatus(
+            id, existing.type(), existing.name(), recoveredState,
+            now, attributes, existing.location()));
+    }
+
+    /**
+     * Run the strongest adapter-specific liveness check available on demand.
+     * Only a device already classified LATE or MISSED may enter this path;
+     * catalog admission and operational authority remain enforced by the
+     * registry before any adapter can be reached.
+     */
+    public DeviceLivenessCheckResult checkNow(String deviceId) {
+        DeviceStatus current = registry.get(deviceId);
+        if (current == null || registry.descriptor(deviceId).isEmpty()) {
+            throw new IllegalArgumentException("Operational device not found");
+        }
+
+        CheckinStatus previous = checkinStatuses.get(deviceId);
+        if (previous != CheckinStatus.LATE && previous != CheckinStatus.MISSED) {
+            throw new IllegalStateException("Check now is available only while a device is LATE or MISSED");
+        }
+
+        Instant checkedAt = Instant.now();
+        if (Duration.between(current.lastSeen(), checkedAt)
+            .compareTo(staleThresholdFor(deviceId, current)) <= 0) {
+            checkinStatuses.put(deviceId, CheckinStatus.ON_SCHEDULE);
+            recoverIfNeeded(deviceId, "checked in before the requested active check ran");
+            return new DeviceLivenessCheckResult(deviceId, "CHECK_NOW",
+                DeviceLivenessCheckResult.Outcome.REACHABLE, previous,
+                CheckinStatus.ON_SCHEDULE, checkedAt,
+                "The device checked in after this card was last refreshed.");
+        }
+
+        ActiveCheckAttempt attempt = performActiveCheck(
+            deviceId, registry.descriptor(deviceId), checkedAt);
+        CheckinStatus currentStatus = previous;
+        if (attempt.outcome() == DeviceLivenessCheckResult.Outcome.REACHABLE) {
+            currentStatus = CheckinStatus.ON_SCHEDULE;
+            checkinStatuses.put(deviceId, currentStatus);
+            recoverIfNeeded(deviceId, "user-requested check confirmed reachability");
+        }
+        log.info("User-requested liveness check for {}: {} ({})",
+            deviceId, attempt.outcome(), attempt.message());
+        return new DeviceLivenessCheckResult(deviceId, "CHECK_NOW",
+            attempt.outcome(), previous, currentStatus, checkedAt, attempt.message());
+    }
+
+    private record ActiveCheckAttempt(
+        DeviceLivenessCheckResult.Outcome outcome,
+        String message
+    ) {}
 
     private void recoverIfNeeded(String id, String reason) {
         if (staleSince.containsKey(id)) {
@@ -242,10 +327,16 @@ public class DeviceHealthMonitor {
 
     /** Per-device checkin status, keyed by deviceId. Devices not yet checked this cycle are omitted. */
     public Map<String, CheckinStatus> getCheckinStatuses() {
-        return Map.copyOf(checkinStatuses);
+        Map<String, CheckinStatus> authorized = new LinkedHashMap<>();
+        checkinStatuses.forEach((deviceId, status) -> {
+            if (registry.operationallyAuthorized(deviceId)) authorized.put(deviceId, status);
+        });
+        return Map.copyOf(authorized);
     }
 
     public Optional<Instant> getStaleSince(String deviceId) {
-        return Optional.ofNullable(staleSince.get(deviceId));
+        return registry.operationallyAuthorized(deviceId)
+            ? Optional.ofNullable(staleSince.get(deviceId))
+            : Optional.empty();
     }
 }

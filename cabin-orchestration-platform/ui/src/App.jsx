@@ -900,17 +900,100 @@ export function checkinStatusLabel(state, checkinStatus) {
   }
 }
 
+export function recoveryActionAvailable(checkinStatus) {
+  return checkinStatus === "LATE" || checkinStatus === "MISSED";
+}
+
+// Battery telemetry is positive evidence that a device has a battery; its
+// absence is not evidence that the device is mains-powered. Keep the fallback
+// conditional so the card never invents a power-source classification.
+export function recoveryPowerNotice(device) {
+  const attrs = device?.attributes || {};
+  const reportsBattery = attrs.battery != null || attrs.battery_low != null;
+  return reportsBattery
+    ? "This device reports a battery. Checking now can use additional battery."
+    : "If this device is battery-powered, checking now can use additional battery.";
+}
+
 function useCheckinStatuses(apiBase) {
   const [statuses, setStatuses] = useState({});
-  useEffect(() => {
+  const refresh = useCallback(() => {
     let cancelled = false;
-    fetch(`${apiBase}/api/devices/checkin-status`)
+    const request = fetch(`${apiBase}/api/devices/checkin-status`)
       .then(r => r.json())
       .then(data => { if (!cancelled) setStatuses(data || {}); })
       .catch(() => {});
-    return () => { cancelled = true; };
+    return { request, cancel: () => { cancelled = true; } };
   }, [apiBase]);
-  return statuses;
+  useEffect(() => {
+    const pending = refresh();
+    return pending.cancel;
+  }, [refresh]);
+  return { statuses, refresh: () => refresh().request };
+}
+
+export function DeviceRecoveryAction({ device, checkinStatus, onChecked, compact = false }) {
+  const app = useApp() || {};
+  const auth = app.auth;
+  const [checking, setChecking] = useState(false);
+  const [receipt, setReceipt] = useState(null);
+  const [error, setError] = useState(null);
+  const available = recoveryActionAvailable(checkinStatus) && receipt?.outcome !== "REACHABLE";
+
+  if (!available && !receipt) return null;
+
+  const checkNow = async () => {
+    setChecking(true);
+    setError(null);
+    try {
+      const apiBase = LOCATIONS[device.location]?.apiBase || LOCATIONS.cabin.apiBase;
+      const response = await auth.authedFetch(
+        `${apiBase}/api/devices/${encodeURIComponent(device.deviceId)}/check-now`,
+        { method: "POST" }
+      );
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(body.detail || body.message || `Check failed (${response.status})`);
+      }
+      setReceipt(body);
+      await Promise.all([
+        Promise.resolve(onChecked?.()),
+        body.outcome === "REACHABLE" ? Promise.resolve(app.refreshDevices?.()) : Promise.resolve(),
+      ]);
+    } catch (e) {
+      setError(e.message || "The device check could not be completed.");
+    } finally {
+      setChecking(false);
+    }
+  };
+
+  const receiptClass = receipt?.outcome === "REACHABLE"
+    ? "recovery-receipt-ok"
+    : "recovery-receipt-warn";
+  return (
+    <div className={`device-recovery${compact ? " device-recovery-compact" : ""}`}>
+      {available && (
+        <>
+          <button className="btn-secondary recovery-check-button" onClick={checkNow} disabled={checking}>
+            <RefreshCw size={12} className={checking ? "recovery-spinning" : ""}/>
+            {checking ? "Checking…" : "Check now"}
+          </button>
+          <span className="recovery-power-notice"><Battery size={11}/>{recoveryPowerNotice(device)}</span>
+        </>
+      )}
+      {receipt && (
+        <span className={`recovery-receipt ${receiptClass}`} role="status">
+          {receipt.message}
+          {receipt.receiptId && (
+            <span className="recovery-receipt-id" title={`Audit receipt ${receipt.receiptId}`}>
+              Receipt {receipt.receiptId.slice(0, 8)}
+            </span>
+          )}
+        </span>
+      )}
+      {error && <span className="recovery-receipt recovery-receipt-error" role="alert">{error}</span>}
+    </div>
+  );
 }
 
 function deviceIcon(type) {
@@ -1379,7 +1462,7 @@ function DmSeeView({ devices, selected, onSelect, reorderMode }) {
   const [health, setHealth] = useState(null);
   const [dragIdx, setDragIdx] = useState(null);
   const [overIdx, setOverIdx] = useState(null);
-  const checkinStatuses = useCheckinStatuses(LOCATIONS.cabin.apiBase);
+  const { statuses: checkinStatuses, refresh: refreshCheckins } = useCheckinStatuses(LOCATIONS.cabin.apiBase);
 
   useEffect(() => {
     fetch(`${LOCATIONS.cabin.apiBase}/api/system/health`)
@@ -1442,7 +1525,8 @@ function DmSeeView({ devices, selected, onSelect, reorderMode }) {
       </div>
       {sel && (
         <div className="dm-detail">
-          <DmDeviceDetail device={sel} checkinStatus={checkinStatuses[sel.deviceId]} />
+          <DmDeviceDetail device={sel} checkinStatus={checkinStatuses[sel.deviceId]}
+            onCheckinRefresh={refreshCheckins} />
         </div>
       )}
     </div>
@@ -1759,7 +1843,7 @@ function DmDeviceRow({ device, selected, onClick, dragHandle, checkinStatus }) {
   );
 }
 
-function DmDeviceDetail({ device, checkinStatus }) {
+function DmDeviceDetail({ device, checkinStatus, onCheckinRefresh }) {
   const override = checkinStatusLabel(device.state, checkinStatus);
   return (
     <div className="dm-detail-inner">
@@ -1777,6 +1861,8 @@ function DmDeviceDetail({ device, checkinStatus }) {
           <span>{device.lastSeen ? new Date(device.lastSeen).toLocaleString() : "—"}</span>
         </div>
       </div>
+      <DeviceRecoveryAction device={device} checkinStatus={checkinStatus}
+        onChecked={onCheckinRefresh} />
       {Object.keys(device.attributes || {}).length > 0 && (
         <>
           <div className="dm-detail-section">Attributes</div>
@@ -1926,7 +2012,7 @@ function CameraHealthPanel({ locCfg }) {
 }
 
 // Renders KPI tiles + Grafana + event log for a single location.
-function LocationMonitoringSection({ locCfg, devices, active }) {
+function LocationMonitoringSection({ locCfg, devices, active, checkinStatuses, onCheckinRefresh }) {
   const liveMessages = useMqttTelemetry(active, locCfg.wsBase);
   const [tempUnit, toggleTempUnit] = useTempUnit();
 
@@ -1950,14 +2036,16 @@ function LocationMonitoringSection({ locCfg, devices, active }) {
 
       <div className="kpi-grid">
         {pressure && (
-          <KpiTile icon={Droplets} label="Water Pressure" deviceId={pressure.deviceId}
+          <KpiTile icon={Droplets} label="Water Pressure" device={pressure}
             value={pressure.attributes?.psi != null ? `${pressure.attributes.psi} PSI` : "—"}
-            state={pressure.state} />
+            state={pressure.state} checkinStatus={checkinStatuses[pressure.deviceId]}
+            onCheckinRefresh={onCheckinRefresh} />
         )}
         {thermostats.map(t => (
-          <KpiTile key={t.deviceId} icon={Thermometer} label={t.name} deviceId={t.deviceId}
+          <KpiTile key={t.deviceId} icon={Thermometer} label={t.name} device={t}
             value={fmtTemp(t.attributes?.current_temperature, tempUnit)}
-            state={t.state} />
+            state={t.state} checkinStatus={checkinStatuses[t.deviceId]}
+            onCheckinRefresh={onCheckinRefresh} />
         ))}
         {tempSensors.map(s => {
           const temp = s.attributes?.temperature;
@@ -1967,27 +2055,32 @@ function LocationMonitoringSection({ locCfg, devices, active }) {
             hum  != null && `${hum}%`,
           ].filter(Boolean).join(" · ") || "—";
           return (
-            <KpiTile key={s.deviceId} icon={Thermometer} label={s.name} deviceId={s.deviceId}
-              value={val} state={s.state} />
+            <KpiTile key={s.deviceId} icon={Thermometer} label={s.name} device={s}
+              value={val} state={s.state} checkinStatus={checkinStatuses[s.deviceId]}
+              onCheckinRefresh={onCheckinRefresh} />
           );
         })}
         {smoke && (
-          <KpiTile icon={ShieldAlert} label={smoke.name || "Smoke/CO Alarm"} deviceId={smoke.deviceId}
+          <KpiTile icon={ShieldAlert} label={smoke.name || "Smoke/CO Alarm"} device={smoke}
             value={smoke.state || "UNKNOWN"}
-            state={smoke.state === "ALARM" ? "ALARM" : smoke.state} />
+            state={smoke.state === "ALARM" ? "ALARM" : smoke.state}
+            checkinStatus={checkinStatuses[smoke.deviceId]} onCheckinRefresh={onCheckinRefresh} />
         )}
         {energy && (
-          <KpiTile icon={Zap} label="Energy" deviceId={energy.deviceId}
+          <KpiTile icon={Zap} label="Energy" device={energy}
             value={energy.attributes?.state_w != null ? `${energy.attributes.state_w} W` : "—"}
-            state={energy.state} />
+            state={energy.state} checkinStatus={checkinStatuses[energy.deviceId]}
+            onCheckinRefresh={onCheckinRefresh} />
         )}
         {locks.map(l => (
-          <KpiTile key={l.deviceId} icon={Lock} label={l.name} deviceId={l.deviceId}
-            value={l.state} state={l.state} />
+          <KpiTile key={l.deviceId} icon={Lock} label={l.name} device={l}
+            value={l.state} state={l.state} checkinStatus={checkinStatuses[l.deviceId]}
+            onCheckinRefresh={onCheckinRefresh} />
         ))}
         {cameras.map(c => (
-          <KpiTile key={c.deviceId} icon={Camera} label={c.name} deviceId={c.deviceId}
-            value={c.state} state={c.state} />
+          <KpiTile key={c.deviceId} icon={Camera} label={c.name} device={c}
+            value={c.state} state={c.state} checkinStatus={checkinStatuses[c.deviceId]}
+            onCheckinRefresh={onCheckinRefresh} />
         ))}
       </div>
 
@@ -2101,7 +2194,7 @@ function KpiListItem({ device, idx, dragIdx, overIdx, reorderMode, isPinned,
 function MnSeeView({ devices, activeLocation, active, reorderMode }) {
   const [dragIdx, setDragIdx] = useState(null);
   const [overIdx, setOverIdx] = useState(null);
-  const checkinStatuses = useCheckinStatuses(LOCATIONS.cabin.apiBase);
+  const { statuses: checkinStatuses, refresh: refreshCheckins } = useCheckinStatuses(LOCATIONS.cabin.apiBase);
 
   const isAlarm = useCallback((d) => d.state === "ALARM" || d.state === "CRITICAL", []);
   const locDevices = activeLocation === "both"
@@ -2146,7 +2239,8 @@ function MnSeeView({ devices, activeLocation, active, reorderMode }) {
   return (
     <div className={activeLocation === "both" ? "monitoring-split" : ""}>
       {locs.map(loc => (
-        <LocationMonitoringSection key={loc.id} locCfg={loc} devices={devices} active={active} />
+        <LocationMonitoringSection key={loc.id} locCfg={loc} devices={devices} active={active}
+          checkinStatuses={checkinStatuses} onCheckinRefresh={refreshCheckins} />
       ))}
     </div>
   );
@@ -2331,14 +2425,16 @@ function severityClass(override) {
   return { OK: "state-ok", WARN: "state-warn", ALERT: "state-alarm" }[override] || null;
 }
 
-function KpiTile({ icon: Icon, label, value, state, deviceId }) {
+function KpiTile({ icon: Icon, label, value, state, device, checkinStatus, onCheckinRefresh }) {
   const { displayConfigs } = useApp();
+  const deviceId = device?.deviceId;
   const cfg = deviceId ? displayConfigs?.[deviceId] : null;
 
   const effectiveLabel = cfg?.displayName || label;
   const effectiveValue = cfg?.stateLabelMap?.[state] || cfg?.stateLabelMap?.[value] || value;
-  const stCls          = severityClass(cfg?.severityOverride) || stateColor(state);
-  const badgeLabel     = cfg?.stateLabelMap?.[state] || state || "UNKNOWN";
+  const override = !cfg?.stateLabelMap?.[state] ? checkinStatusLabel(state, checkinStatus) : null;
+  const stCls = severityClass(cfg?.severityOverride) || (override ? override.cls : stateColor(state));
+  const badgeLabel = cfg?.stateLabelMap?.[state] || (override ? override.text : state) || "UNKNOWN";
 
   return (
     <div className={`kpi-tile kpi-${stCls}`}>
@@ -2346,6 +2442,8 @@ function KpiTile({ icon: Icon, label, value, state, deviceId }) {
       <div className="kpi-label">{effectiveLabel}</div>
       <div className="kpi-value">{effectiveValue}</div>
       <span className={`state-badge ${stCls}`}>{badgeLabel}</span>
+      <DeviceRecoveryAction device={device} checkinStatus={checkinStatus}
+        onChecked={onCheckinRefresh} compact />
     </div>
   );
 }

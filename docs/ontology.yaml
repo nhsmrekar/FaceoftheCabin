@@ -1523,6 +1523,9 @@ elements:
       - target: audit_log
         type: consumed_by
         cardinality: "1:N"
+      - target: device_liveness_check_action
+        type: consumed_by
+        cardinality: "1:N"
     relates_to:
       ui_components: [ui_device_manager_panel, ui_monitoring_panel]
       elements: [device_operational_authority, device_state]
@@ -1533,6 +1536,211 @@ elements:
       never purchased or installed are AVAILABLE, READY_TO_CONFIGURE, and
       DISABLED, with no check-in row and no alert authority. MQTT/Zigbee and
       RTSP active probes remain liveness evidence only after authority exists.
+
+  - id: device_power_source
+    entity_type: owl:DatatypeProperty
+    layer: backend
+    primitive: false
+    schema_version: "0.4.0"
+    migration_status: complete
+    lifecycle_status: candidate
+    data_class: derived
+    data_type: xsd:string
+    constraint:
+      enum: [BATTERY, MAINS, HYBRID, UNKNOWN]
+      description: >
+        A configured value requires explicit conforming catalog or hardware
+        provenance. Battery telemetry is positive evidence that battery impact
+        must be disclosed, but absence of battery telemetry never proves MAINS.
+        Missing or unresolved evidence is UNKNOWN.
+    ui_display_name: "Power Source"
+    source: >
+      Ontology hardware provenance plus future conforming device-catalog power
+      metadata; battery_percent/battery_low are supporting evidence only
+    rendering:
+      semantic: "Battery powered / Plugged in / Hybrid / Power source unknown"
+      systems: "Power source: BATTERY / MAINS / HYBRID / UNKNOWN"
+      technical: "ontology-backed device power source; no runtime catalog column yet"
+      compliance: "Device energy-impact classification"
+    definition: >
+      The device's authoritative energy-source classification used to explain
+      whether an active check or command can increase battery consumption.
+    relationships:
+      - target: battery_percent
+        type: derives_from
+        cardinality: "N:1"
+      - target: device_liveness_check_action
+        type: consumed_by
+        cardinality: "1:N"
+    relates_to:
+      ui_components: [ui_device_recovery_action]
+      elements: [battery_percent, device_catalog_entry]
+    notes: >
+      Candidate because the durable catalog does not yet carry this field.
+      The 2026-08-09 recovery-card slice follows the same fail-honest rule in
+      the interim: a battery/battery_low attribute produces a definite battery
+      disclosure; missing evidence produces conditional copy, never a fabricated
+      MAINS classification.
+
+  - id: device_liveness_check_action
+    entity_type: owl:Class
+    layer: backend
+    primitive: false
+    schema_version: "0.4.0"
+    migration_status: complete
+    lifecycle_status: used
+    first_used:
+      date: "2026-08-09"
+      ref: "DeviceController.checkNow(), DeviceHealthMonitor.checkNow()"
+    data_class: composite
+    data_type: owl:Class
+    constraint:
+      description: >
+        POST /api/devices/{deviceId}/check-now is authenticated and is valid
+        only when device_operational_authority=true and device_checkin_status is
+        LATE or MISSED. It executes one bounded adapter-specific check and cannot
+        admit, configure, enable, allocate, or command an unauthorized source.
+    ui_display_name: "Check Device Now"
+    source: "authenticated user action from an off-schedule device card"
+    transformation: >
+      LATE/MISSED operational device -> re-read current lastSeen -> Zigbee MQTT
+      retained availability replay OR Home Assistant active fetch OR RTSP socket
+      connect -> normalized receipt -> check-in recovery only on REACHABLE
+    rendering:
+      semantic: "Check now"
+      systems: "Run liveness check"
+      technical: "POST /api/devices/{deviceId}/check-now"
+      compliance: "Authenticated, bounded device-health action"
+    definition: >
+      A user-requested, adapter-specific attempt to obtain current liveness
+      evidence for an accepted device that is late or not responding.
+    relationships:
+      - target: device_operational_authority
+        type: depends_on
+        cardinality: "1:1"
+      - target: device_checkin_status
+        type: depends_on
+        cardinality: "1:1"
+      - target: z2m_retained_availability_probe_result
+        type: derives_from
+        cardinality: "N:1"
+      - target: rtsp_socket_reachable
+        type: derives_from
+        cardinality: "N:1"
+      - target: device_liveness_check_receipt
+        type: triggers
+        cardinality: "1:1"
+      - target: audit_log
+        type: consumed_by
+        cardinality: "1:N"
+    relates_to:
+      ui_components: [ui_device_recovery_action]
+      elements: [device_power_source, device_checkin_status]
+    notes: >
+      "Check now" is intentionally not called "Wake now." Most sleeping
+      battery Zigbee end devices cannot be forced awake remotely. Their approved
+      check asks the broker for retained authoritative availability; HA and RTSP
+      devices receive real active network queries. Unsupported adapters return
+      UNSUPPORTED without inventing a probe. A successful Zigbee check now also
+      refreshes lastSeen and restores the pre-MISSED state; previously retained
+      online only changed one monitor cycle and immediately became stale again.
+      Runtime projections and every action re-check current catalog authority;
+      disablement or revocation after registration immediately suppresses device
+      state, check-in/stale state, commands, polls, and recovery actions without
+      waiting for the next scheduled monitor cycle.
+
+  - id: device_liveness_check_receipt
+    entity_type: owl:Class
+    layer: backend
+    primitive: false
+    schema_version: "0.4.0"
+    migration_status: complete
+    lifecycle_status: used
+    first_used:
+      date: "2026-08-09"
+      ref: "DeviceLivenessCheckResult and DeviceAuditService"
+    data_class: composite
+    data_type: owl:Class
+    constraint:
+      description: >
+        Required fields are deviceId, action=CHECK_NOW, outcome, previousStatus,
+        checkinStatus, checkedAt, message, and receiptId. outcome is one of
+        REACHABLE, REPORTED_OFFLINE, NO_REPLY, or UNSUPPORTED. receiptId resolves
+        to one immutable device_audit_log row.
+    ui_display_name: "Device Check Receipt"
+    source: "DeviceHealthMonitor result plus DeviceAuditService append-only record"
+    rendering:
+      semantic: "What the check found, with receipt"
+      systems: "Liveness check outcome and receipt ID"
+      technical: "DeviceLivenessCheckResult JSON + device_audit_log UUID"
+      compliance: "Attributed device-action evidence"
+    definition: >
+      The immediate and durable evidence returned after a requested device
+      liveness check, distinguishing a confirmed online response, explicit
+      offline report, absence of a reply, and an unsupported check.
+    relationships:
+      - target: device_liveness_check_action
+        type: derives_from
+        cardinality: "1:1"
+      - target: audit_log
+        type: derives_from
+        cardinality: "N:1"
+    relates_to:
+      ui_components: [ui_device_recovery_action]
+      elements: [device_checkin_status, device_power_source]
+    notes: >
+      NO_REPLY is not rewritten as REPORTED_OFFLINE. Only REACHABLE changes the
+      check-in status to ON_SCHEDULE. The short receipt ID shown on the card is
+      the prefix of the full immutable UUID returned by the API.
+
+  - id: ui_device_recovery_action
+    entity_type: owl:Class
+    layer: frontend
+    primitive: false
+    schema_version: "0.4.0"
+    migration_status: complete
+    lifecycle_status: used
+    first_used:
+      date: "2026-08-09"
+      ref: "cabin-ui DeviceRecoveryAction"
+    data_class: composite
+    data_type: owl:Class
+    constraint:
+      description: >
+        Render only for LATE or MISSED operational device cards. Show battery
+        impact disclosure before execution, disable during the request, and
+        render the backend message and receipt ID afterward.
+    ui_display_name: "Device Recovery Action"
+    source: "device_checkin_status + device_liveness_check_action"
+    rendering:
+      semantic: "Check now; battery notice; result"
+      systems: "Off-schedule recovery control"
+      technical: "DeviceRecoveryAction in Device Manager detail and Monitoring KPI tiles"
+      compliance: "Pre-action energy disclosure and action receipt"
+    definition: >
+      The in-card control that lets an authenticated user actively re-check a
+      late or not-responding device without leaving its operational context.
+    relationships:
+      - target: device_checkin_status
+        type: derives_from
+        cardinality: "N:1"
+      - target: device_power_source
+        type: derives_from
+        cardinality: "N:1"
+      - target: device_liveness_check_action
+        type: triggers
+        cardinality: "1:1"
+      - target: device_liveness_check_receipt
+        type: consumes
+        cardinality: "1:1"
+    relates_to:
+      ui_components: [ui_device_manager_panel, ui_monitoring_panel]
+      elements: [device_checkin_status, battery_percent]
+    notes: >
+      The battery message is definite only with positive battery evidence and
+      conditional otherwise. This keeps the interaction useful before the
+      catalog gains conforming power-source metadata without treating missing
+      battery telemetry as mains power.
 
   - id: rtsp_stream_uri
     entity_type: owl:DatatypeProperty
@@ -1900,6 +2108,15 @@ elements:
       was previously written as cabin/security/node_red_armed, a topic
       that was never actually published to; see cabin_camera_overnight_alert
       below for the real incident this caused.)
+      APPROVED 2026-08-09, NOT YET BUILT: monitoring_scope is a separate
+      per-location axis from armed state. Intrinsic smoke/alarm/water-leak
+      hazards remain CRITICAL in every scope. With PERIMETER or FULL active,
+      a qualifying person/door event becomes CRITICAL when armed or reliably
+      unoccupied; reliably occupied plus disarmed retains base severity. An
+      unknown, stale, or conflicting armed/presence context is WARN with
+      explicit "context unknown" provenance and remains visible/auditable, but
+      does not send a confirmed-intrusion CRITICAL notification. Missing
+      monitoring scope is UNKNOWN/unconfigured, never silently OFF.
       CRITICAL events additionally trigger NtfyAlertPublisher. **Correction,
       2026-08-07**: this previously claimed it POSTs "to the same ntfy.sh
       topic cabin_camera_overnight_alert already uses" — checked by hash
@@ -4222,6 +4439,57 @@ elements:
 # arm_state's notes for the real bug (and fix) this reconciliation found.
 # ═══════════════════════════════════════════════════════════════════════════
 
+  - id: monitoring_scope
+    entity_type: owl:DatatypeProperty
+    layer: backend
+    primitive: false
+    schema_version: "0.4.0"
+    migration_status: complete
+    lifecycle_status: candidate
+    data_class: derived
+    data_type: xsd:string
+    constraint:
+      enum: [OFF, PERIMETER, FULL]
+      description: >
+        A configured per-location value. OFF deliberately disables intrusion
+        monitoring while retaining base events; PERIMETER watches boundary
+        doors and exterior cameras; FULL additionally includes conforming
+        interior motion/presence sources. A missing row means UNKNOWN/not
+        configured and is not an implicit fourth enum value or an alias for OFF.
+    ui_display_name: "Monitoring Scope"
+    source: "future authenticated per-location control and durable configuration"
+    rendering:
+      semantic: "Not watching / Watching the perimeter / Watching all configured areas"
+      systems: "Monitoring scope: OFF / PERIMETER / FULL / Unknown when absent"
+      technical: "planned per-hub_location state; no persistence/API/UI yet"
+      compliance: "Authenticated intrusion-monitoring intent"
+    definition: >
+      The explicit per-location choice of which admitted security sources may
+      participate in intrusion-context classification, independent of whether
+      the location is armed.
+    relationships:
+      - target: hub_location
+        type: depends_on
+        cardinality: "N:1"
+      - target: event_severity
+        type: consumed_by
+        cardinality: "1:N"
+      - target: audit_log
+        type: consumed_by
+        cardinality: "1:N"
+    relates_to:
+      ui_components: [ui_security_badge, ui_monitoring_panel]
+      elements: [active_presence_profile, automation_cabin_security_publish_arm_state]
+    notes: >
+      Product-owner ruling 2026-08-09. This separates "watching" from armed
+      state without granting authority to discovered or nonconforming sources.
+      Only authenticated, auditable application authority may set scope; no
+      device or outside publisher can create or change it. There is no
+      grandfathering: absence remains UNKNOWN until the location is explicitly
+      configured. Under UNKNOWN armed/presence context, a monitored person/door
+      event is WARN/context-unknown rather than a fabricated confirmed
+      intrusion. Implementation remains Item 6 work.
+
   - id: automation_cabin_security_publish_arm_state
     entity_type: owl:Class
     layer: integration
@@ -4801,7 +5069,12 @@ elements:
       Promoted from Phase 2 to core requirement per adjuster and analyst
       feedback (user test group session 2026-07-26). Must be present when
       device command endpoint ships. Immutable — no delete or update,
-      append only.
+      append only. IMPLEMENTATION STATUS 2026-08-09: device_audit_log and
+      DeviceAuditService now persist authenticated CHECK_NOW liveness outcomes
+      with actor, detail, timestamp, and receipt ID. Generic device commands,
+      alert triggers, sensor state changes, and other system events are not yet
+      wired into this table, so the full definition above remains only partially
+      implemented and must not be represented as complete.
 
 # ═══════════════════════════════════════════════════════════════════════════
 # ONTOLOGY META-ELEMENTS

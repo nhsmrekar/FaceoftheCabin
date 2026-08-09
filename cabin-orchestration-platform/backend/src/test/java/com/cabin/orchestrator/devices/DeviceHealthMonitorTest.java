@@ -181,8 +181,9 @@ class DeviceHealthMonitorTest {
         DeviceDescriptor descriptor = new DeviceDescriptor("z2m-motion", "Motion", DeviceType.MOTION_SENSOR,
             Set.of(DeviceCapability.TELEMETRY), "mqtt", "zigbee2mqtt/motion", true, "cabin");
         authorizeAndRegister(registry, "ZIGBEE2MQTT", "0x00124b0000000001", descriptor);
+        Instant staleLastSeen = Instant.now().minus(Duration.ofMinutes(11));
         registry.update(new DeviceStatus("z2m-motion", DeviceType.MOTION_SENSOR, "Motion", "ONLINE",
-            Instant.now().minus(Duration.ofMinutes(11)), Map.of(), "cabin")); // past 10min Zigbee threshold
+            staleLastSeen, Map.of(), "cabin")); // past 10min Zigbee threshold
 
         Zigbee2MqttAdapter z2m = mock(Zigbee2MqttAdapter.class);
         when(z2m.probeRetainedAvailability(eq("zigbee2mqtt/motion"), any(Duration.class)))
@@ -192,6 +193,115 @@ class DeviceHealthMonitorTest {
 
         assertEquals(CheckinStatus.ON_SCHEDULE, monitor.getCheckinStatuses().get("z2m-motion"));
         assertEquals("ONLINE", registry.get("z2m-motion").state());
+        assertTrue(registry.get("z2m-motion").lastSeen().isAfter(staleLastSeen),
+            "accepted retained availability must refresh liveness or the next cycle immediately marks it stale again");
+    }
+
+    @Test
+    void checkNowRetriesALateDeviceAndReturnsAReachabilityReceipt() {
+        FakeHaAdapter ha = new FakeHaAdapter();
+        DeviceRegistry registry = registryWith(ha);
+        authorizeAndRegister(registry, "TEST_HA", "dev-check-now", haDescriptor("dev-check-now"));
+        registry.update(new DeviceStatus("dev-check-now", DeviceType.LOCK, "Test HA Lock", "ONLINE",
+            Instant.now().minus(Duration.ofMinutes(20)), Map.of("battery", 72), "cabin"));
+        DeviceHealthMonitor monitor = monitorWith(registry);
+
+        monitor.checkHealth();
+        assertEquals(CheckinStatus.LATE, monitor.getCheckinStatuses().get("dev-check-now"));
+        ha.respond = true;
+
+        DeviceLivenessCheckResult result = monitor.checkNow("dev-check-now");
+
+        assertEquals(DeviceLivenessCheckResult.Outcome.REACHABLE, result.outcome());
+        assertEquals(CheckinStatus.LATE, result.previousStatus());
+        assertEquals(CheckinStatus.ON_SCHEDULE, result.checkinStatus());
+        assertEquals(CheckinStatus.ON_SCHEDULE, monitor.getCheckinStatuses().get("dev-check-now"));
+        assertEquals(2, ha.fetchCalls, "scheduled check plus the explicit user-requested retry");
+    }
+
+    @Test
+    void checkNowKeepsMissedWhenZigbeeStillReportsOffline() {
+        DeviceRegistry registry = registryWith();
+        DeviceDescriptor descriptor = new DeviceDescriptor("z2m-door", "Door", DeviceType.CONTACT_SENSOR,
+            Set.of(DeviceCapability.TELEMETRY), "mqtt", "zigbee2mqtt/door", true, "cabin");
+        authorizeAndRegister(registry, "ZIGBEE2MQTT", "0x00124b0000000002", descriptor);
+        registry.update(new DeviceStatus("z2m-door", DeviceType.CONTACT_SENSOR, "Door", "ONLINE",
+            Instant.now().minus(Duration.ofMinutes(31)), Map.of("battery", 65), "cabin"));
+        Zigbee2MqttAdapter z2m = mock(Zigbee2MqttAdapter.class);
+        when(z2m.probeRetainedAvailability(eq("zigbee2mqtt/door"), any(Duration.class)))
+            .thenReturn(Optional.of(false));
+        DeviceHealthMonitor monitor = new DeviceHealthMonitor(registry, z2m);
+        monitor.checkHealth();
+
+        DeviceLivenessCheckResult result = monitor.checkNow("z2m-door");
+
+        assertEquals(DeviceLivenessCheckResult.Outcome.REPORTED_OFFLINE, result.outcome());
+        assertEquals(CheckinStatus.MISSED, result.checkinStatus());
+        assertEquals("OFFLINE", registry.get("z2m-door").state());
+        verify(z2m, times(2)).probeRetainedAvailability(eq("zigbee2mqtt/door"), any(Duration.class));
+    }
+
+    @Test
+    void checkNowReportsUnsupportedWithoutInventingAProbe() {
+        DeviceRegistry registry = registryWith();
+        DeviceDescriptor descriptor = new DeviceDescriptor("router-test", "Router", DeviceType.ROUTER,
+            Set.of(DeviceCapability.TELEMETRY), "unknown", "test://router", true, "cabin");
+        authorizeAndRegister(registry, "TEST_DEVICE", "router-test", descriptor);
+        registry.update(new DeviceStatus("router-test", DeviceType.ROUTER, "Router", "ONLINE",
+            Instant.now().minus(Duration.ofHours(2)), Map.of(), "cabin"));
+        DeviceHealthMonitor monitor = monitorWith(registry);
+        monitor.checkHealth();
+
+        DeviceLivenessCheckResult result = monitor.checkNow("router-test");
+
+        assertEquals(DeviceLivenessCheckResult.Outcome.UNSUPPORTED, result.outcome());
+        assertEquals(CheckinStatus.MISSED, result.checkinStatus());
+        assertTrue(result.message().contains("next scheduled report"));
+    }
+
+    @Test
+    void checkNowRejectsDevicesThatAreNotLateOrMissed() {
+        FakeHaAdapter ha = new FakeHaAdapter();
+        DeviceRegistry registry = registryWith(ha);
+        authorizeAndRegister(registry, "TEST_HA", "dev-on-time", haDescriptor("dev-on-time"));
+        registry.update(new DeviceStatus("dev-on-time", DeviceType.LOCK, "Test HA Lock", "ONLINE",
+            Instant.now(), Map.of(), "cabin"));
+        DeviceHealthMonitor monitor = monitorWith(registry);
+        monitor.checkHealth();
+
+        assertThrows(IllegalStateException.class, () -> monitor.checkNow("dev-on-time"));
+        assertEquals(0, ha.fetchCalls, "an on-schedule card must not create active network traffic");
+    }
+
+    @Test
+    void disablingARegisteredDeviceImmediatelyRemovesStateAndPreventsFurtherChecks() {
+        FakeHaAdapter ha = new FakeHaAdapter();
+        DeviceRegistry registry = registryWith(ha);
+        authorizeAndRegister(registry, "TEST_HA", "dev-disable", haDescriptor("dev-disable"));
+        registry.update(new DeviceStatus("dev-disable", DeviceType.LOCK, "Test HA Lock", "ONLINE",
+            Instant.now().minus(Duration.ofMinutes(20)), Map.of(), "cabin"));
+        DeviceHealthMonitor monitor = monitorWith(registry);
+        monitor.checkHealth();
+        assertEquals(CheckinStatus.LATE, monitor.getCheckinStatuses().get("dev-disable"));
+        assertEquals(1, ha.fetchCalls);
+
+        catalog.setEnablement("dev-disable", DeviceEnablementStatus.DISABLED,
+            "HUMAN", "owner@example.com", "security regression test");
+
+        assertFalse(registry.operationallyAuthorized("dev-disable"));
+        assertNull(registry.get("dev-disable"));
+        assertTrue(registry.descriptor("dev-disable").isEmpty());
+        assertTrue(registry.all().isEmpty());
+        assertTrue(registry.byLocation("cabin").isEmpty());
+        assertFalse(monitor.getCheckinStatuses().containsKey("dev-disable"));
+        assertTrue(monitor.getStaleSince("dev-disable").isEmpty());
+        assertFalse(registry.update(new DeviceStatus("dev-disable", DeviceType.LOCK,
+            "Test HA Lock", "ONLINE", Instant.now(), Map.of(), "cabin")));
+        assertFalse(registry.sendCommand("dev-disable", "unlock", null));
+        assertTrue(registry.activeFetch("dev-disable").isEmpty());
+        assertThrows(IllegalArgumentException.class, () -> monitor.checkNow("dev-disable"));
+        assertEquals(1, ha.fetchCalls, "disablement must stop all subsequent adapter probes immediately");
+        assertEquals(0, ha.commandCalls, "disablement must stop all subsequent commands immediately");
     }
 
     private static class FakeRtspAdapter implements ProtocolAdapter {

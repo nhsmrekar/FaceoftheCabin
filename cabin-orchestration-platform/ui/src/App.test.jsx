@@ -1,7 +1,7 @@
 import React from "react";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
-import { isCameraEvent, mergeHubLocations, buildCameraEventsUrl, buildCameraLiveUrl, isLocationDeployed, formatPresenceSignals, formatArmedTitle, cameraHealthLabel, allLocationsLabel, checkinStatusLabel, alertEligibleOfflineCount, resolvePostAuthPanel, AuthGate, App, AppContext, FamilyHubPanel, FamilyConfigPanel, RulesPanel } from "./App.jsx";
+import { isCameraEvent, mergeHubLocations, buildCameraEventsUrl, buildCameraLiveUrl, isLocationDeployed, formatPresenceSignals, formatArmedTitle, cameraHealthLabel, allLocationsLabel, checkinStatusLabel, recoveryActionAvailable, recoveryPowerNotice, alertEligibleOfflineCount, resolvePostAuthPanel, AuthGate, App, AppContext, DeviceRecoveryAction, FamilyHubPanel, FamilyConfigPanel, RulesPanel } from "./App.jsx";
 import { ThemeProvider } from "./ThemeProvider.jsx";
 
 // Covers the actual reported bug this session ("Camera Events" showing
@@ -302,6 +302,76 @@ describe("checkinStatusLabel", () => {
   it("falls through to the raw state for ON_SCHEDULE or missing data", () => {
     expect(checkinStatusLabel("ONLINE", "ON_SCHEDULE")).toBeNull();
     expect(checkinStatusLabel("ONLINE", undefined)).toBeNull();
+  });
+});
+
+describe("off-schedule device recovery actions", () => {
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
+  it("only enables Check now for LATE or MISSED devices", () => {
+    expect(recoveryActionAvailable("LATE")).toBe(true);
+    expect(recoveryActionAvailable("MISSED")).toBe(true);
+    expect(recoveryActionAvailable("ON_SCHEDULE")).toBe(false);
+    expect(recoveryActionAvailable(undefined)).toBe(false);
+  });
+
+  it("uses battery telemetry as positive evidence but does not infer mains power from missing data", () => {
+    expect(recoveryPowerNotice({ attributes: { battery: 72 } })).toMatch(/^This device reports a battery\./);
+    expect(recoveryPowerNotice({ attributes: {} })).toMatch(/^If this device is battery-powered,/);
+  });
+
+  it("runs the authenticated check-now action and shows the backend receipt", async () => {
+    const authedFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        deviceId: "z2m-door/side",
+        action: "CHECK_NOW",
+        outcome: "REACHABLE",
+        previousStatus: "LATE",
+        checkinStatus: "ON_SCHEDULE",
+        checkedAt: "2026-08-09T19:00:00Z",
+        message: "The Zigbee availability source reports this device online.",
+        receiptId: "abc12345-rest-of-receipt",
+      }),
+    });
+    const refreshDevices = vi.fn();
+    const onChecked = vi.fn();
+    const device = {
+      deviceId: "z2m-door/side",
+      location: "cabin",
+      attributes: { battery: 72 },
+    };
+
+    render(
+      <AppContext.Provider value={{ auth: { authedFetch }, refreshDevices }}>
+        <DeviceRecoveryAction device={device} checkinStatus="LATE" onChecked={onChecked} />
+      </AppContext.Provider>
+    );
+
+    expect(screen.getByText(/checking now can use additional battery/i)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /check now/i }));
+
+    await waitFor(() => expect(authedFetch).toHaveBeenCalledWith(
+      expect.stringContaining("/api/devices/z2m-door%2Fside/check-now"),
+      { method: "POST" }
+    ));
+    expect((await screen.findByRole("status")).textContent).toMatch(/reports this device online/i);
+    expect(screen.getByText("Receipt abc12345")).toBeTruthy();
+    expect(onChecked).toHaveBeenCalledOnce();
+    expect(refreshDevices).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("button", { name: /check now/i })).toBeNull();
+  });
+
+  it("renders no recovery control for an on-schedule device", () => {
+    const { container } = render(
+      <AppContext.Provider value={{ auth: { authedFetch: vi.fn() } }}>
+        <DeviceRecoveryAction device={{ deviceId: "ok", attributes: {} }} checkinStatus="ON_SCHEDULE" />
+      </AppContext.Provider>
+    );
+    expect(container.innerHTML).toBe("");
   });
 });
 

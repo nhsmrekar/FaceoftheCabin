@@ -263,6 +263,46 @@ body {
 .attr-val { color: #e6edf3; font-family: monospace; }
 .device-actions { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
 
+/* ─── Off-schedule device recovery ─────────────────────────────────────── */
+.device-recovery {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 8px;
+  padding-top: 9px;
+  border-top: 1px solid #21262d;
+}
+.device-recovery-compact { width: 100%; }
+.recovery-check-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.recovery-check-button:disabled { cursor: progress; opacity: 0.7; }
+.recovery-power-notice {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 4px;
+  color: var(--warning);
+  font-size: 10px;
+  line-height: 1.35;
+}
+.recovery-power-notice svg { flex: 0 0 auto; margin-top: 1px; }
+.recovery-receipt {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 11px;
+  line-height: 1.4;
+}
+.recovery-receipt-id { color: var(--text-dim); font-family: monospace; font-size: 9px; }
+.recovery-receipt-ok { color: var(--success); }
+.recovery-receipt-warn { color: var(--warning); }
+.recovery-receipt-error { color: var(--danger); }
+.recovery-spinning { animation: recovery-spin 0.8s linear infinite; }
+@keyframes recovery-spin { to { transform: rotate(360deg); } }
+
 /* ─── Config Cards ─────────────────────────────────────────────────────── */
 .config-grid {
   display: grid;

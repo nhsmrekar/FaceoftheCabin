@@ -72,6 +72,20 @@ CREATE TABLE IF NOT EXISTS device_lifecycle_decision (
 CREATE INDEX IF NOT EXISTS idx_device_decision_candidate
     ON device_lifecycle_decision (candidate_id, decided_at DESC);
 
+-- Append-only evidence for authenticated device actions. Application code has
+-- insert/read access only; there is deliberately no update/delete workflow.
+CREATE TABLE IF NOT EXISTS device_audit_log (
+    id           VARCHAR(64) PRIMARY KEY,
+    device_id    VARCHAR(128) NOT NULL,
+    action_type  VARCHAR(64) NOT NULL,
+    actor_email  VARCHAR(320) NOT NULL,
+    outcome      VARCHAR(64) NOT NULL,
+    detail       TEXT,
+    created_at   BIGINT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_device_audit_device
+    ON device_audit_log (device_id, created_at DESC);
+
 -- Ontology: platform_auth_session + platform_session_credential.
 -- The browser receives the opaque credential; only its SHA-256 digest is
 -- durable. Google access tokens never enter this table.

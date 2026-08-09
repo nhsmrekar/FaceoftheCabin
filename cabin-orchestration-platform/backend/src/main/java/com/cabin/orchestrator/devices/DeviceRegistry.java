@@ -145,18 +145,19 @@ public class DeviceRegistry {
     }
 
     public boolean register(DeviceStatus status) {
-        if (!mayUpdate(status.deviceId())) return false;
+        if (!operationallyAuthorized(status.deviceId())) return false;
         statuses.put(status.deviceId(), status);
         return true;
     }
 
     public boolean update(DeviceStatus status) {
-        if (!mayUpdate(status.deviceId())) return false;
+        if (!operationallyAuthorized(status.deviceId())) return false;
         statuses.put(status.deviceId(), status);
         return true;
     }
 
-    private boolean mayUpdate(String deviceId) {
+    /** Re-check current catalog authority; runtime registration is not permanent permission. */
+    public boolean operationallyAuthorized(String deviceId) {
         return descriptors.containsKey(deviceId)
             && catalog.authorizedEntryForDeviceId(deviceId).isPresent();
     }
@@ -167,27 +168,30 @@ public class DeviceRegistry {
     }
 
     public List<DeviceStatus> all() {
-        return statuses.values().stream().toList();
+        return statuses.values().stream()
+            .filter(status -> operationallyAuthorized(status.deviceId()))
+            .toList();
     }
 
     public List<DeviceStatus> byLocation(String location) {
-        return statuses.values().stream()
+        return all().stream()
             .filter(s -> location.equals(s.location()))
             .toList();
     }
 
     public DeviceStatus get(String deviceId) {
-        return statuses.get(deviceId);
+        return operationallyAuthorized(deviceId) ? statuses.get(deviceId) : null;
     }
 
     public Optional<DeviceDescriptor> descriptor(String deviceId) {
-        return Optional.ofNullable(descriptors.get(deviceId));
+        return operationallyAuthorized(deviceId)
+            ? Optional.ofNullable(descriptors.get(deviceId))
+            : Optional.empty();
     }
 
     public boolean sendCommand(String deviceId, String command, Object payload) {
-        if (catalog.authorizedEntryForDeviceId(deviceId).isEmpty()) return false;
+        if (!operationallyAuthorized(deviceId)) return false;
         DeviceDescriptor desc = descriptors.get(deviceId);
-        if (desc == null) return false;
         ProtocolAdapter adapter = adapters.get(desc.protocolAdapter());
         if (adapter == null) return false;
         return adapter.sendCommand(desc, command, payload);
@@ -200,9 +204,8 @@ public class DeviceRegistry {
      * MQTT devices are push-only and always return empty here).
      */
     public Optional<DeviceStatus> activeFetch(String deviceId) {
-        if (catalog.authorizedEntryForDeviceId(deviceId).isEmpty()) return Optional.empty();
+        if (!operationallyAuthorized(deviceId)) return Optional.empty();
         DeviceDescriptor desc = descriptors.get(deviceId);
-        if (desc == null) return Optional.empty();
         ProtocolAdapter adapter = adapters.get(desc.protocolAdapter());
         if (adapter == null) return Optional.empty();
         return adapter.fetchState(desc);

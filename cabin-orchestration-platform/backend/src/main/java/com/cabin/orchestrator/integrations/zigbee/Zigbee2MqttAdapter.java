@@ -1,6 +1,10 @@
 package com.cabin.orchestrator.integrations.zigbee;
 
 import com.cabin.orchestrator.devices.DeviceRegistry;
+import com.cabin.orchestrator.devices.catalog.DeviceCatalogEntry;
+import com.cabin.orchestrator.devices.catalog.DeviceCatalogService;
+import com.cabin.orchestrator.devices.catalog.DeviceConfigurationStatus;
+import com.cabin.orchestrator.devices.catalog.DeviceObservation;
 import com.cabin.orchestrator.devices.model.*;
 import com.cabin.orchestrator.events.AlertSeverityClassifier;
 import com.cabin.orchestrator.events.CabinEvent;
@@ -47,26 +51,30 @@ public class Zigbee2MqttAdapter implements MqttCallback {
     private static final String DEVICE_ID_PREFIX = "z2m-";
 
     @Value("${cabin.mqtt.brokerUrl:tcp://localhost:1883}")
-    private String brokerUrl;
+    private String brokerUrl = "tcp://localhost:1883";
 
     @Value("${cabin.zigbee.location:cabin}")
-    private String zigbeeLocation;
+    private String zigbeeLocation = "cabin";
 
     private MqttClient client;
     private final DeviceRegistry registry;
+    private final DeviceCatalogService catalog;
     private final EventPublisher eventPublisher;
     private final SignalQualityRegistry signalQualityRegistry;
     private final ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
 
-    // Tracks friendly names seen via bridge/devices so we know which topics are Z2M devices
-    private final Set<String> knownFriendlyNames = ConcurrentHashMap.newKeySet();
+    private static final String IDENTITY_CONFLICT = "<identity-conflict>";
+    // The roster's IEEE identity owns routing; a friendly name is only a lookup hint.
+    private final Map<String, String> sourceIdentityByFriendlyName = new ConcurrentHashMap<>();
     // Tracks whether bridge is online
     private volatile String bridgeState = "offline";
     private final Map<String, CompletableFuture<Boolean>> availabilityProbes = new ConcurrentHashMap<>();
 
-    public Zigbee2MqttAdapter(DeviceRegistry registry, EventPublisher eventPublisher,
+    public Zigbee2MqttAdapter(DeviceRegistry registry, DeviceCatalogService catalog,
+                               EventPublisher eventPublisher,
                                SignalQualityRegistry signalQualityRegistry) {
         this.registry = registry;
+        this.catalog = catalog;
         this.eventPublisher = eventPublisher;
         this.signalQualityRegistry = signalQualityRegistry;
     }
@@ -103,8 +111,8 @@ public class Zigbee2MqttAdapter implements MqttCallback {
                 if (friendlyName.endsWith("/availability")) {
                     // Z2M availability is the authoritative online/offline signal — use it directly
                     String name = friendlyName.substring(0, friendlyName.lastIndexOf("/availability"));
-                    if (knownFriendlyNames.contains(name)) handleAvailability(name, payload);
-                } else if (!friendlyName.startsWith("bridge/") && knownFriendlyNames.contains(friendlyName)) {
+                    if (sourceIdentityByFriendlyName.containsKey(name)) handleAvailability(name, payload);
+                } else if (!friendlyName.startsWith("bridge/") && sourceIdentityByFriendlyName.containsKey(friendlyName)) {
                     handleDeviceState(friendlyName, payload);
                 }
             }
@@ -165,8 +173,10 @@ public class Zigbee2MqttAdapter implements MqttCallback {
     }
 
     private void handleAvailability(String friendlyName, String payload) {
-        String deviceId = DEVICE_ID_PREFIX + friendlyName.replace(" ", "_");
         try {
+            Optional<DeviceCatalogEntry> authorized = authorizedEntry(friendlyName);
+            if (authorized.isEmpty()) return;
+            String deviceId = authorized.get().deviceId();
             JsonNode node = mapper.readTree(payload);
             String avail = node.has("state") ? node.get("state").asText() : payload.trim();
             DeviceStatus existing = registry.get(deviceId);
@@ -183,8 +193,9 @@ public class Zigbee2MqttAdapter implements MqttCallback {
     }
 
     /**
-     * Parses the zigbee2mqtt/bridge/devices array and registers any new devices.
-     * Each element has: ieee_address, friendly_name, type, definition.exposes[]
+     * Parses the Zigbee roster into retained candidates. A roster entry does
+     * not auto-register anything: only an admitted IEEE binding whose catalog
+     * descriptor still matches the observed integration may become active.
      */
     private void handleBridgeDeviceList(String payload) {
         try {
@@ -193,30 +204,54 @@ public class Zigbee2MqttAdapter implements MqttCallback {
             for (JsonNode device : devices) {
                 String friendlyName = device.path("friendly_name").asText(null);
                 if (friendlyName == null || friendlyName.equals("Coordinator")) continue;
-                knownFriendlyNames.add(friendlyName);
-                String deviceId = DEVICE_ID_PREFIX + friendlyName.replace(" ", "_");
-                if (registry.descriptor(deviceId).isPresent()) continue; // already registered
+                String ieeeAddress = device.path("ieee_address").asText(null);
+                String sourceIdentity = ieeeAddress == null || ieeeAddress.isBlank()
+                    ? "unverified-friendly:" + friendlyName
+                    : ieeeAddress.toLowerCase(Locale.ROOT);
+                sourceIdentityByFriendlyName.merge(friendlyName, sourceIdentity,
+                    (existing, incoming) -> existing.equals(incoming) ? existing : IDENTITY_CONFLICT);
 
+                String proposedDeviceId = DEVICE_ID_PREFIX + friendlyName.replace(" ", "_");
                 JsonNode definition = device.path("definition");
                 Set<DeviceCapability> caps = inferCapabilities(definition);
                 DeviceType type = inferType(definition, caps);
+                Map<String, Object> metadata = new LinkedHashMap<>();
+                metadata.put("friendly_name", friendlyName);
+                metadata.put("ieee_address", ieeeAddress == null ? "unresolved" : ieeeAddress);
+                metadata.put("roster_type", device.path("type").asText("unknown"));
+                metadata.put("interview_completed", device.path("interview_completed").asBoolean(false));
+                metadata.put("disabled", device.path("disabled").asBoolean(false));
+                metadata.put("model", definition.path("model").asText("unknown"));
+                metadata.put("vendor", definition.path("vendor").asText("unknown"));
+                metadata.put("description", definition.path("description").asText("unknown"));
+                metadata.put("inferred_type", type.name());
+                metadata.put("inferred_capabilities", caps.stream().map(Enum::name).sorted().toList());
+                catalog.observe(new DeviceObservation("ZIGBEE2MQTT", sourceIdentity,
+                    proposedDeviceId, metadata));
 
-                DeviceDescriptor desc = new DeviceDescriptor(
-                    deviceId,
-                    friendlyName,
-                    type,
-                    caps,
-                    "mqtt",
-                    Z2M_PREFIX + friendlyName,
-                    true,
-                    zigbeeLocation
-                );
-                registry.registerDescriptor(desc);
-                log.info("Z2M registered device: {} ({})", friendlyName, type);
+                catalog.authorizedEntryForObservation("ZIGBEE2MQTT", sourceIdentity)
+                    .ifPresent(entry -> activateIfConforming(entry, friendlyName, type));
             }
         } catch (Exception e) {
             log.warn("Failed to parse Z2M device list: {}", e.getMessage());
         }
+    }
+
+    private void activateIfConforming(DeviceCatalogEntry entry, String friendlyName,
+                                       DeviceType observedType) {
+        boolean matches = "mqtt".equals(entry.protocolAdapter())
+            && (Z2M_PREFIX + friendlyName).equals(entry.connectionString())
+            && zigbeeLocation.equals(entry.location())
+            && entry.type() == observedType;
+        if (!matches) {
+            if (entry.configurationStatus() == DeviceConfigurationStatus.CONFORMING) {
+                catalog.setConfiguration(entry.deviceId(), DeviceConfigurationStatus.REGRESSED,
+                    "SYSTEM", "zigbee2mqtt-roster",
+                    "Observed topic, location, or inferred type no longer matches the admitted catalog descriptor");
+            }
+            return;
+        }
+        registry.registerDescriptor(entry.descriptor());
     }
 
     /**
@@ -225,8 +260,10 @@ public class Zigbee2MqttAdapter implements MqttCallback {
      * Unknown properties are stored in attributes as-is.
      */
     private void handleDeviceState(String friendlyName, String payload) {
-        String deviceId = DEVICE_ID_PREFIX + friendlyName.replace(" ", "_");
         try {
+            Optional<DeviceCatalogEntry> authorized = authorizedEntry(friendlyName);
+            if (authorized.isEmpty()) return;
+            String deviceId = authorized.get().deviceId();
             JsonNode node = mapper.readTree(payload);
             if (!node.isObject()) return;
 
@@ -261,6 +298,12 @@ public class Zigbee2MqttAdapter implements MqttCallback {
         } catch (Exception e) {
             log.warn("Failed to parse Z2M state for {}: {}", friendlyName, e.getMessage());
         }
+    }
+
+    private Optional<DeviceCatalogEntry> authorizedEntry(String friendlyName) {
+        String sourceIdentity = sourceIdentityByFriendlyName.get(friendlyName);
+        if (sourceIdentity == null || IDENTITY_CONFLICT.equals(sourceIdentity)) return Optional.empty();
+        return catalog.authorizedEntryForObservation("ZIGBEE2MQTT", sourceIdentity);
     }
 
     /**
@@ -405,6 +448,10 @@ public class Zigbee2MqttAdapter implements MqttCallback {
 
     /** Send a property update to a Zigbee device (e.g. water_leak_buzzer: true). */
     public boolean sendCommand(String friendlyName, Map<String, Object> payload) {
+        Optional<DeviceCatalogEntry> authorized = authorizedEntry(friendlyName);
+        if (authorized.isEmpty()
+            || !authorized.get().capabilities().contains(DeviceCapability.COMMAND)
+            || !(Z2M_PREFIX + friendlyName).equals(authorized.get().connectionString())) return false;
         if (client == null || !client.isConnected()) return false;
         try {
             String json = mapper.writeValueAsString(payload);
@@ -418,7 +465,11 @@ public class Zigbee2MqttAdapter implements MqttCallback {
     }
 
     public String getBridgeState() { return bridgeState; }
-    public Set<String> getKnownFriendlyNames() { return Collections.unmodifiableSet(knownFriendlyNames); }
+    public Set<String> getKnownFriendlyNames() {
+        return sourceIdentityByFriendlyName.keySet().stream()
+            .filter(name -> authorizedEntry(name).isPresent())
+            .collect(java.util.stream.Collectors.toUnmodifiableSet());
+    }
 
     @Override public void connectionLost(Throwable cause) {
         log.warn("Z2M adapter connection lost: {}", cause.getMessage());

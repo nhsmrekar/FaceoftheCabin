@@ -38,6 +38,15 @@ cabin:
     calendarId: ${GOOGLE_CALENDAR_ID:primary}
     oauthClientId: ${GOOGLE_CLIENT_ID:}
     oauthClientSecret: ${GOOGLE_CLIENT_SECRET:}
+  security:
+    googleAuth:
+      enabled: true
+    deviceAdmission:
+      # Comma-separated verified Google accounts allowed to inspect or mutate
+      # retained device candidates and lifecycle decisions. Empty is fail
+      # closed: the catalog still retains observations, but every review API
+      # returns 503 until an operator explicitly configures the allowlist.
+      allowedEmails: ${CABIN_DEVICE_ADMISSION_EMAILS:}
   devices:
     waterPressure:
       lowPsiAlert: 30

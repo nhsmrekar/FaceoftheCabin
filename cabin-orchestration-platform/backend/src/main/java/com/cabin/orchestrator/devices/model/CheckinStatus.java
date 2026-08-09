@@ -12,7 +12,5 @@ public enum CheckinStatus {
     /** Past its expected interval but not yet confirmed unreachable — grace tier. */
     LATE,
     /** Past the grace tier, and (where an active check is possible) a live probe failed too. */
-    MISSED,
-    /** Device is disabled/not yet installed — staleness tracking doesn't apply. */
-    NOT_CONFIGURED
+    MISSED
 }

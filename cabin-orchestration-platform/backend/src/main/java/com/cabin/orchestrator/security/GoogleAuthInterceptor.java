@@ -67,6 +67,16 @@ public class GoogleAuthInterceptor implements HandlerInterceptor {
                 && ("GET".equalsIgnoreCase(request.getMethod()) || "POST".equalsIgnoreCase(request.getMethod()))) {
             return true;
         }
+        // Preserve the current public read-only device-status surface while
+        // closing every device write. Candidate/catalog reads are deliberately
+        // not included here; those require both this token check and the
+        // narrower operator allowlist in DeviceCatalogController.
+        boolean isPrivateDeviceConfig = path.endsWith("/config");
+        boolean isDeviceRead = !isPrivateDeviceConfig
+            && (path.equals(contextPath + "/api/devices")
+                || path.startsWith(contextPath + "/api/devices/"))
+            && "GET".equalsIgnoreCase(request.getMethod());
+        if (isDeviceRead) return true;
         String token = extractToken(request);
         if (token == null) {
             response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "Missing bearer token");

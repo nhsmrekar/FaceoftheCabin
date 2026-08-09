@@ -1,6 +1,12 @@
 package com.cabin.orchestrator.devices;
 
 import com.cabin.orchestrator.devices.adapter.ProtocolAdapter;
+import com.cabin.orchestrator.devices.catalog.DeviceCatalogEntry;
+import com.cabin.orchestrator.devices.catalog.DeviceCatalogService;
+import com.cabin.orchestrator.devices.catalog.DeviceIdentityAssurance;
+import com.cabin.orchestrator.devices.catalog.DeviceAdmissionStatus;
+import com.cabin.orchestrator.devices.catalog.DeviceConfigurationStatus;
+import com.cabin.orchestrator.devices.catalog.DeviceEnablementStatus;
 import com.cabin.orchestrator.devices.model.*;
 import com.cabin.orchestrator.integrations.zigbee.Zigbee2MqttAdapter;
 import com.cabin.orchestrator.kafka.EventPublisher;
@@ -15,6 +21,7 @@ import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
+import static com.cabin.orchestrator.devices.catalog.DeviceCatalogTestSupport.authorize;
 
 /**
  * Covers the 2026-08-08 checkin-status tiering: "offline" was misleading
@@ -30,27 +37,21 @@ class DeviceHealthMonitorTest {
     // ── Pure classification ────────────────────────────────────────────────
 
     @Test
-    void classifyReturnsNotConfiguredWhenDisabledRegardlessOfTiming() {
-        assertEquals(CheckinStatus.NOT_CONFIGURED,
-            DeviceHealthMonitor.classify(Duration.ofDays(1), THRESHOLD, MISSED, false));
-    }
-
-    @Test
     void classifyReturnsOnScheduleWithinThreshold() {
         assertEquals(CheckinStatus.ON_SCHEDULE,
-            DeviceHealthMonitor.classify(Duration.ofMinutes(5), THRESHOLD, MISSED, true));
+            DeviceHealthMonitor.classify(Duration.ofMinutes(5), THRESHOLD, MISSED));
     }
 
     @Test
     void classifyReturnsLatePastThresholdButWithinMissedMultiple() {
         assertEquals(CheckinStatus.LATE,
-            DeviceHealthMonitor.classify(Duration.ofMinutes(20), THRESHOLD, MISSED, true));
+            DeviceHealthMonitor.classify(Duration.ofMinutes(20), THRESHOLD, MISSED));
     }
 
     @Test
     void classifyReturnsMissedPastTheGraceMultiple() {
         assertEquals(CheckinStatus.MISSED,
-            DeviceHealthMonitor.classify(Duration.ofMinutes(46), THRESHOLD, MISSED, true));
+            DeviceHealthMonitor.classify(Duration.ofMinutes(46), THRESHOLD, MISSED));
     }
 
     // ── Full cycle behavior ────────────────────────────────────────────────
@@ -59,48 +60,77 @@ class DeviceHealthMonitorTest {
     private static class FakeHaAdapter implements ProtocolAdapter {
         boolean respond = false;
         String respondState = "ONLINE";
+        int fetchCalls;
+        int commandCalls;
 
         @Override public String adapterType() { return "ha_rest"; }
 
         @Override public Optional<DeviceStatus> fetchState(DeviceDescriptor d) {
+            fetchCalls++;
             if (!respond) return Optional.empty();
             return Optional.of(new DeviceStatus(
                 d.deviceId(), d.type(), d.name(), respondState, Instant.now(), Map.of(), d.location()));
         }
 
-        @Override public boolean sendCommand(DeviceDescriptor d, String c, Object p) { return true; }
+        @Override public boolean sendCommand(DeviceDescriptor d, String c, Object p) {
+            commandCalls++;
+            return true;
+        }
+    }
+
+    private DeviceCatalogService catalog;
+
+    private DeviceRegistry registryWith(ProtocolAdapter... adapters) {
+        catalog = DeviceCatalogService.inMemory();
+        return new DeviceRegistry(java.util.List.of(adapters), catalog);
+    }
+
+    private void authorizeAndRegister(DeviceRegistry registry, String sourceType,
+                                      String sourceIdentity, DeviceDescriptor descriptor) {
+        DeviceCatalogEntry entry = authorize(catalog, sourceType, sourceIdentity, descriptor);
+        assertTrue(registry.registerDescriptor(entry.descriptor()));
     }
 
     private DeviceHealthMonitor monitorWith(DeviceRegistry registry) {
-        Zigbee2MqttAdapter z2m = new Zigbee2MqttAdapter(registry, new EventPublisher(), new SignalQualityRegistry());
+        Zigbee2MqttAdapter z2m = new Zigbee2MqttAdapter(registry, catalog,
+            new EventPublisher(), new SignalQualityRegistry());
         return new DeviceHealthMonitor(registry, z2m);
     }
 
-    private DeviceDescriptor haDescriptor(String id, boolean enabled) {
+    private DeviceDescriptor haDescriptor(String id) {
         return new DeviceDescriptor(id, "Test HA Lock", DeviceType.LOCK,
-            Set.of(DeviceCapability.COMMAND), "ha_rest", "lock.test", enabled, "cabin");
+            Set.of(DeviceCapability.COMMAND), "ha_rest", "lock.test", true, "cabin");
     }
 
     @Test
-    void disabledDeviceIsNotConfiguredAndNeverFlipsToOffline() {
+    void availableDisabledDeviceHasNoRuntimeOrCheckinState() {
         FakeHaAdapter ha = new FakeHaAdapter();
-        DeviceRegistry registry = new DeviceRegistry(java.util.List.of(ha));
-        registry.registerDescriptor(haDescriptor("dev-1", false));
-        registry.update(new DeviceStatus("dev-1", DeviceType.LOCK, "Test HA Lock", "UNKNOWN",
-            Instant.now().minus(Duration.ofDays(2)), Map.of(), "cabin"));
+        DeviceRegistry registry = registryWith(ha);
+        DeviceDescriptor disabled = new DeviceDescriptor("dev-1", "Test HA Lock", DeviceType.LOCK,
+            Set.of(DeviceCapability.COMMAND), "ha_rest", "lock.test", false, "cabin");
+        catalog.ensureAvailableEntry(new DeviceCatalogEntry(disabled.deviceId(), "test_dev_1",
+            disabled.name(), disabled.type(), disabled.capabilities(), disabled.protocolAdapter(),
+            disabled.connectionString(), disabled.location(), DeviceIdentityAssurance.PROBABLE,
+            DeviceAdmissionStatus.AVAILABLE, DeviceConfigurationStatus.READY_TO_CONFIGURE,
+            DeviceEnablementStatus.DISABLED, Instant.now()));
+        assertFalse(registry.registerDescriptor(disabled));
 
         DeviceHealthMonitor monitor = monitorWith(registry);
         monitor.checkHealth();
 
-        assertEquals(CheckinStatus.NOT_CONFIGURED, monitor.getCheckinStatuses().get("dev-1"));
-        assertEquals("UNKNOWN", registry.get("dev-1").state());
+        assertNull(registry.get("dev-1"));
+        assertFalse(monitor.getCheckinStatuses().containsKey("dev-1"));
+        assertFalse(registry.sendCommand("dev-1", "unlock", null));
+        assertTrue(registry.activeFetch("dev-1").isEmpty());
+        assertEquals(0, ha.commandCalls, "an unavailable device cannot reach its network adapter");
+        assertEquals(0, ha.fetchCalls, "an unavailable device cannot trigger an active probe");
     }
 
     @Test
     void lateDeviceDoesNotFlipStateToOfflineYet() {
         FakeHaAdapter ha = new FakeHaAdapter(); // active fetch fails (respond=false)
-        DeviceRegistry registry = new DeviceRegistry(java.util.List.of(ha));
-        registry.registerDescriptor(haDescriptor("dev-2", true));
+        DeviceRegistry registry = registryWith(ha);
+        authorizeAndRegister(registry, "TEST_HA", "dev-2", haDescriptor("dev-2"));
         registry.update(new DeviceStatus("dev-2", DeviceType.LOCK, "Test HA Lock", "ONLINE",
             Instant.now().minus(Duration.ofMinutes(20)), Map.of(), "cabin")); // past 15min threshold, within 45min missed
 
@@ -115,8 +145,8 @@ class DeviceHealthMonitorTest {
     @Test
     void missedDeviceFlipsToOfflineAfterActivePingAlsoFails() {
         FakeHaAdapter ha = new FakeHaAdapter(); // active fetch fails
-        DeviceRegistry registry = new DeviceRegistry(java.util.List.of(ha));
-        registry.registerDescriptor(haDescriptor("dev-3", true));
+        DeviceRegistry registry = registryWith(ha);
+        authorizeAndRegister(registry, "TEST_HA", "dev-3", haDescriptor("dev-3"));
         registry.update(new DeviceStatus("dev-3", DeviceType.LOCK, "Test HA Lock", "ONLINE",
             Instant.now().minus(Duration.ofMinutes(46)), Map.of(), "cabin")); // past 45min missed threshold
 
@@ -132,8 +162,8 @@ class DeviceHealthMonitorTest {
         FakeHaAdapter ha = new FakeHaAdapter();
         ha.respond = true;
         ha.respondState = "ONLINE";
-        DeviceRegistry registry = new DeviceRegistry(java.util.List.of(ha));
-        registry.registerDescriptor(haDescriptor("dev-4", true));
+        DeviceRegistry registry = registryWith(ha);
+        authorizeAndRegister(registry, "TEST_HA", "dev-4", haDescriptor("dev-4"));
         registry.update(new DeviceStatus("dev-4", DeviceType.LOCK, "Test HA Lock", "ONLINE",
             Instant.now().minus(Duration.ofMinutes(50)), Map.of(), "cabin")); // well past both thresholds
 
@@ -147,9 +177,10 @@ class DeviceHealthMonitorTest {
 
     @Test
     void retainedOnlineAvailabilityRecoversStaleZigbeeDevice() {
-        DeviceRegistry registry = new DeviceRegistry(java.util.List.of());
-        registry.registerDescriptor(new DeviceDescriptor("z2m-motion", "Motion", DeviceType.MOTION_SENSOR,
-            Set.of(DeviceCapability.TELEMETRY), "mqtt", "zigbee2mqtt/motion", true, "cabin"));
+        DeviceRegistry registry = registryWith();
+        DeviceDescriptor descriptor = new DeviceDescriptor("z2m-motion", "Motion", DeviceType.MOTION_SENSOR,
+            Set.of(DeviceCapability.TELEMETRY), "mqtt", "zigbee2mqtt/motion", true, "cabin");
+        authorizeAndRegister(registry, "ZIGBEE2MQTT", "0x00124b0000000001", descriptor);
         registry.update(new DeviceStatus("z2m-motion", DeviceType.MOTION_SENSOR, "Motion", "ONLINE",
             Instant.now().minus(Duration.ofMinutes(11)), Map.of(), "cabin")); // past 10min Zigbee threshold
 
@@ -180,9 +211,10 @@ class DeviceHealthMonitorTest {
 
     @Test
     void noRetainedReplyDoesNotHideMissedZigbeeDevice() {
-        DeviceRegistry registry = new DeviceRegistry(java.util.List.of());
-        registry.registerDescriptor(new DeviceDescriptor("z2m-motion", "Motion", DeviceType.MOTION_SENSOR,
-            Set.of(DeviceCapability.TELEMETRY), "mqtt", "zigbee2mqtt/motion", true, "cabin"));
+        DeviceRegistry registry = registryWith();
+        DeviceDescriptor descriptor = new DeviceDescriptor("z2m-motion", "Motion", DeviceType.MOTION_SENSOR,
+            Set.of(DeviceCapability.TELEMETRY), "mqtt", "zigbee2mqtt/motion", true, "cabin");
+        authorizeAndRegister(registry, "ZIGBEE2MQTT", "0x00124b0000000001", descriptor);
         registry.update(new DeviceStatus("z2m-motion", DeviceType.MOTION_SENSOR, "Motion", "ONLINE",
             Instant.now().minus(Duration.ofMinutes(31)), Map.of(), "cabin"));
         Zigbee2MqttAdapter z2m = mock(Zigbee2MqttAdapter.class);
@@ -199,9 +231,10 @@ class DeviceHealthMonitorTest {
     void rtspSocketSuccessRecoversStaleCamera() {
         FakeRtspAdapter rtsp = new FakeRtspAdapter();
         rtsp.respond = true;
-        DeviceRegistry registry = new DeviceRegistry(java.util.List.of(rtsp));
-        registry.registerDescriptor(new DeviceDescriptor("camera-test", "Camera", DeviceType.CAMERA,
-            Set.of(DeviceCapability.STREAM), "rtsp", "rtsp://camera:554/stream", true, "home"));
+        DeviceRegistry registry = registryWith(rtsp);
+        DeviceDescriptor descriptor = new DeviceDescriptor("camera-test", "Camera", DeviceType.CAMERA,
+            Set.of(DeviceCapability.STREAM), "rtsp", "rtsp://camera:554/stream", true, "home");
+        authorizeAndRegister(registry, "RTSP_ENDPOINT", "camera-serial-1", descriptor);
         registry.update(new DeviceStatus("camera-test", DeviceType.CAMERA, "Camera", "ONLINE",
             Instant.now().minus(Duration.ofMinutes(20)), Map.of("cameraFps", 12.0), "home"));
 
@@ -218,9 +251,10 @@ class DeviceHealthMonitorTest {
     @Test
     void rtspSocketFailureDoesNotHideMissedCamera() {
         FakeRtspAdapter rtsp = new FakeRtspAdapter();
-        DeviceRegistry registry = new DeviceRegistry(java.util.List.of(rtsp));
-        registry.registerDescriptor(new DeviceDescriptor("camera-test", "Camera", DeviceType.CAMERA,
-            Set.of(DeviceCapability.STREAM), "rtsp", "rtsp://camera:554/stream", true, "home"));
+        DeviceRegistry registry = registryWith(rtsp);
+        DeviceDescriptor descriptor = new DeviceDescriptor("camera-test", "Camera", DeviceType.CAMERA,
+            Set.of(DeviceCapability.STREAM), "rtsp", "rtsp://camera:554/stream", true, "home");
+        authorizeAndRegister(registry, "RTSP_ENDPOINT", "camera-serial-1", descriptor);
         registry.update(new DeviceStatus("camera-test", DeviceType.CAMERA, "Camera", "ONLINE",
             Instant.now().minus(Duration.ofMinutes(16)), Map.of(), "home"));
 
@@ -232,27 +266,25 @@ class DeviceHealthMonitorTest {
     }
 
     @Test
-    void disabledOfflineDeviceRemainsInDiagnosticTotalButNotAlertEligibleCount() {
-        DeviceRegistry registry = new DeviceRegistry(java.util.List.of());
-        registry.registerDescriptor(new DeviceDescriptor("camera-disabled", "Future Camera", DeviceType.CAMERA,
-            Set.of(DeviceCapability.STREAM), "rtsp", "rtsp://camera:554/stream", false, "home"));
-        registry.update(new DeviceStatus("camera-disabled", DeviceType.CAMERA, "Future Camera", "OFFLINE",
-            Instant.now().minus(Duration.ofDays(1)), Map.of(), "home"));
+    void availableDisabledDeviceCannotEnterDiagnosticOrAlertCounts() {
+        DeviceRegistry registry = registryWith();
         DeviceHealthMonitor monitor = monitorWith(registry);
 
         monitor.checkHealth();
         Map<String, Object> health = monitor.getSystemHealth();
 
-        assertEquals(1L, health.get("offline"));
+        assertEquals(0, health.get("total"));
+        assertEquals(0L, health.get("offline"));
         assertEquals(0L, health.get("alertEligibleOffline"));
-        assertEquals(CheckinStatus.NOT_CONFIGURED, monitor.getCheckinStatuses().get("camera-disabled"));
+        assertFalse(monitor.getCheckinStatuses().containsKey("camera-disabled"));
     }
 
     @Test
     void enabledOfflineDeviceIsAlertEligible() {
-        DeviceRegistry registry = new DeviceRegistry(java.util.List.of());
-        registry.registerDescriptor(new DeviceDescriptor("device-enabled", "Expected Device", DeviceType.ROUTER,
-            Set.of(DeviceCapability.TELEMETRY), "unknown", "", true, "cabin"));
+        DeviceRegistry registry = registryWith();
+        DeviceDescriptor descriptor = new DeviceDescriptor("device-enabled", "Expected Device", DeviceType.ROUTER,
+            Set.of(DeviceCapability.TELEMETRY), "unknown", "test://device-enabled", true, "cabin");
+        authorizeAndRegister(registry, "TEST_DEVICE", "device-enabled", descriptor);
         registry.update(new DeviceStatus("device-enabled", DeviceType.ROUTER, "Expected Device", "OFFLINE",
             Instant.now().minus(Duration.ofHours(2)), Map.of(), "cabin"));
         DeviceHealthMonitor monitor = monitorWith(registry);

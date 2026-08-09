@@ -59,16 +59,16 @@ Two identical stacks: cabin-hub + home-hub, linked via Tailscale
 
 ### Device Registry & Protocol Adapters
 
-Central `DeviceRegistry` holds `DeviceDescriptor` (static config) and `DeviceStatus` (runtime state) for all devices across both locations. Protocol adapters implement a `ProtocolAdapter` interface:
+The durable `DeviceCatalogService` holds ontology identity and independent admission, configuration, and enablement states. `DeviceRegistry` contains only the operational projection (`DeviceDescriptor` plus runtime `DeviceStatus`) for explicitly bound devices whose catalog record is `ADMITTED`, `CONFORMING`, and `ENABLED`. Protocol adapters implement a `ProtocolAdapter` interface:
 
-- **Zigbee2MqttAdapter** — subscribes to `zigbee2mqtt/#`, auto-discovers devices from `bridge/devices`, infers capabilities by recursively walking the `exposes[]` schema (handles composite features like THIRDREALITY Drip Detect). Any device registered by Z2M is auto-registered with a `z2m-` prefix.
+- **Zigbee2MqttAdapter** — subscribes to `zigbee2mqtt/#`, retains observations from `bridge/devices`, and infers candidate capabilities by recursively walking the `exposes[]` schema (handles composite features like THIRDREALITY Drip Detect). An observation remains inert until its IEEE identity is explicitly bound to a conforming, enabled catalog record; friendly names never allocate runtime state.
 - **HomeAssistantAdapter** — uses the HA REST API, routing to `cabin-hub` or `home-hub` based on device location.
 
-21 devices are seeded as defaults.
+Thirteen historically observed Cabin Zigbee records and fourteen described Home prospects are seeded into the catalog as `AVAILABLE`, `READY_TO_CONFIGURE`, `DISABLED`, and unbound. No seed is a runtime device or has alert/command authority.
 
 ### Device Health Monitor
 
-`@Scheduled` task runs every 60 s. Stale thresholds are adapter-type-aware: Zigbee (10 min), cameras (5 min), HA devices (15 min), others (30 min). On stale detection, status flips to `OFFLINE` and `staleSince` is written to attributes. Reconnect logging uses exponential backoff. `GET /api/system/health` returns aggregate counts (online / offline / alarm / unknown), Zigbee bridge state, and a stale device list.
+`@Scheduled` task runs every 60 s for operationally authorized devices only. Stale thresholds are adapter-type-aware: Zigbee (10 min), cameras (5 min), HA devices (15 min), others (30 min). A stale device first becomes `LATE`; only a failed grace-period/active-probe path becomes `MISSED` and flips runtime state to `OFFLINE`. `GET /api/system/health` returns aggregate counts, Zigbee bridge state, and stale devices; catalog-only, rejected, disabled, or nonconforming records have no liveness or alert state.
 
 ### Presence Profiles
 

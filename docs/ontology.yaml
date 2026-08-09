@@ -27,7 +27,7 @@
 #   ontology    — this file and the semantic layer itself
 #
 # ─────────────────────────────────────────────────────────────────────────────
-# Schema v0.3.0 — OWL/Collibra-aligned master data structure
+# Schema v0.4.0 — OWL/Collibra-aligned master data structure
 # ─────────────────────────────────────────────────────────────────────────────
 #
 # Top-level per-element fields:
@@ -35,7 +35,7 @@
 #   entity_type:      owl:Class | owl:DatatypeProperty | owl:ObjectProperty
 #   layer:            layer taxonomy value (see above)
 #   primitive:        true = source value; false = derived or composite
-#   schema_version:   "0.3.0" — all entries now at current schema
+#   schema_version:   per-entry schema revision; v0.4.0 adds lifecycle metadata
 #   migration_status: complete
 #   first_verified_live: (optional, added 2026-08-07) — when and how this
 #                     concept was first confirmed real, not assumed:
@@ -113,10 +113,10 @@
 #   notes:            implementation notes, constraints, known issues
 # ─────────────────────────────────────────────────────────────────────────────
 
-version: "0.3.0"
+version: "0.4.1"
 status: draft
 maintainer: FaceoftheCabin platform team
-last_updated: "2026-07-28"
+last_updated: "2026-08-09"
 
 # ═══════════════════════════════════════════════════════════════════════════
 # HARDWARE ELEMENTS
@@ -905,6 +905,577 @@ elements:
       UNKNOWN for >5 minutes after backend start, treat as a connectivity
       issue. See QA check: devices-z2m.
 
+  - id: device_identity_evidence
+    entity_type: owl:Class
+    layer: ontology
+    primitive: false
+    schema_version: "0.4.0"
+    migration_status: complete
+    lifecycle_status: candidate
+    data_class: composite
+    data_type: owl:Class
+    constraint:
+      description: >
+        Append-only evidence record with evidence_type, asserted_value,
+        observed_at, source_ref, inference_window, and confidence. Evidence
+        types include immutable_identifier, source_reported_metadata,
+        purchase_record, temporal_availability, installation_context,
+        human_attestation, and integration_observation.
+    ui_display_name: "Device Identity Evidence"
+    source: >
+      Device firmware/bridge metadata, Git history, purchase and installation
+      records, human review, and integration observations. Google Drive is not
+      an authorized source for this fork task.
+    rendering:
+      semantic: "Why we think this is that device"
+      systems: "Identity evidence, source, date, and confidence"
+      technical: "device_candidate.metadata plus versioned ontology/Git source_ref"
+      compliance: "Device identity provenance"
+    definition: >
+      A dated, attributable fact or inference used to identify a physical or
+      virtual device without presenting a probability as an immutable fact.
+    relationships:
+      - target: device_identity_assurance
+        type: consumed_by
+        cardinality: "N:1"
+      - target: device_observation_candidate
+        type: consumed_by
+        cardinality: "N:1"
+      - target: audit_log
+        type: consumed_by
+        cardinality: "1:N"
+    relates_to:
+      ui_components: []
+      elements: [zigbee_ieee_address, zigbee_model, zigbee_vendor, z2m_friendly_name]
+    notes: >
+      Temporal triangulation is explicitly valid evidence: brand, purchase
+      source/date window, model release availability, purpose, and
+      contemporaneous implementation notes may narrow a probable model. It
+      must carry its inference window and confidence and never substitutes
+      for a source-observed immutable identifier when operational authority
+      is decided.
+
+  - id: device_identity_assurance
+    entity_type: owl:DatatypeProperty
+    layer: ontology
+    primitive: false
+    schema_version: "0.4.0"
+    migration_status: complete
+    lifecycle_status: candidate
+    data_class: derived
+    data_type: xsd:string
+    constraint:
+      enum: [UNRESOLVED, PROBABLE, CORROBORATED, VERIFIED]
+      description: >
+        UNRESOLVED = name or role only. PROBABLE = a supported inference,
+        including temporal/product triangulation. CORROBORATED = multiple
+        independent sources agree but no immutable binding has been approved.
+        VERIFIED = an immutable or equivalently authoritative source identity
+        has been observed and explicitly bound to the catalog record.
+    ui_display_name: "Identity Assurance"
+    source: "device_identity_evidence plus device_identity_binding"
+    rendering:
+      semantic: "How sure we are which device this is"
+      systems: "Unresolved / Probable / Corroborated / Verified"
+      technical: "DeviceIdentityAssurance enum"
+      compliance: "Identity assurance level"
+    definition: >
+      The strength of the evidence that an observed source is the same device
+      described by a platform catalog record.
+    relationships:
+      - target: device_identity_evidence
+        type: derives_from
+        cardinality: "N:1"
+      - target: device_identity_binding
+        type: derives_from
+        cardinality: "1:1"
+      - target: device_operational_authority
+        type: consumed_by
+        cardinality: "1:1"
+    relates_to:
+      ui_components: []
+      elements: [device_identity_evidence, device_identity_binding]
+    notes: >
+      A current model inferred from purchase timing can be PROBABLE or
+      CORROBORATED. It cannot become VERIFIED merely because that model was
+      the likely product sold at the time.
+
+  - id: device_observation_candidate
+    entity_type: owl:Class
+    layer: backend
+    primitive: false
+    schema_version: "0.4.0"
+    migration_status: complete
+    lifecycle_status: candidate
+    data_class: composite
+    data_type: owl:Class
+    constraint:
+      description: >
+        Durable record keyed by source_type + source_identity, with opaque
+        candidate_id, proposed_device_id, bounded metadata, first_seen,
+        last_seen, seen_count, and device_candidate_disposition.
+    ui_display_name: "Available Device"
+    source: >
+      Discovery rosters and ingress topics such as
+      zigbee2mqtt/bridge/devices, cabin/device/#, and cabin/camera/#.
+    rendering:
+      semantic: "A device is available to review"
+      systems: "Observed candidate with provenance and review status"
+      technical: "device_observation_candidate durable record"
+      compliance: "Unadmitted device observation"
+    definition: >
+      A retained observation of a device or integration source that is known
+      to the platform but has not thereby gained permission to affect runtime
+      state, events, rules, commands, probes, identifiers, or allocation.
+    relationships:
+      - target: device_candidate_disposition
+        type: depends_on
+        cardinality: "1:1"
+      - target: device_identity_evidence
+        type: depends_on
+        cardinality: "1:N"
+      - target: device_identity_binding
+        type: consumed_by
+        cardinality: "1:1"
+      - target: device_lifecycle_decision
+        type: consumed_by
+        cardinality: "1:N"
+    relates_to:
+      ui_components: []
+      elements: [device_candidate_disposition, device_identity_evidence]
+    notes: >
+      "Available" means known and reviewable, not planned, configured,
+      enabled, admitted, online, or safe. Proposed IDs are hints only and are
+      never allocated into DeviceRegistry before an approved identity binding.
+
+  - id: device_candidate_disposition
+    entity_type: owl:DatatypeProperty
+    layer: backend
+    primitive: false
+    schema_version: "0.4.0"
+    migration_status: complete
+    lifecycle_status: candidate
+    data_class: derived
+    data_type: xsd:string
+    constraint:
+      enum: [AVAILABLE, ADMITTED, REJECTED]
+      description: >
+        AVAILABLE = retained and reviewable. ADMITTED = explicitly bound to
+        a catalog record. REJECTED = actively denied and still retained.
+        Reconsidering a rejection returns it to AVAILABLE, never ADMITTED.
+    ui_display_name: "Candidate Review Status"
+    source: "device_observation_candidate and append-only lifecycle decisions"
+    rendering:
+      semantic: "Available / Accepted / Rejected"
+      systems: "Candidate disposition"
+      technical: "DeviceCandidateDisposition enum"
+      compliance: "Device admission review outcome"
+    definition: >
+      The review outcome for one retained observed identity, preserved across
+      restart and resurfacing so a previously rejected source cannot silently
+      re-enter the application.
+    relationships:
+      - target: device_observation_candidate
+        type: derives_from
+        cardinality: "1:1"
+      - target: device_lifecycle_decision
+        type: derives_from
+        cardinality: "N:1"
+    relates_to:
+      ui_components: []
+      elements: [device_observation_candidate, device_lifecycle_decision]
+    notes: >
+      Rejected candidates remain searchable by humans and authorized system
+      scans. Resurfacing updates last_seen, seen_count, and metadata while
+      preserving REJECTED. A false-negative rejection can be reconsidered,
+      but re-admission is always a separate explicit decision.
+
+  - id: device_catalog_entry
+    entity_type: owl:Class
+    layer: backend
+    primitive: false
+    schema_version: "0.4.0"
+    migration_status: complete
+    lifecycle_status: used
+    first_used:
+      date: "2026-08-09"
+      ref: "DeviceCatalogService and device_catalog_entry table"
+    data_class: composite
+    data_type: owl:Class
+    constraint:
+      description: >
+        Durable record keyed by device_id with ontology_id, semantic name,
+        type, capabilities, protocol adapter, protected connection material,
+        location, identity assurance, admission status, configuration status,
+        enablement status, and updated_at. Connection material is never
+        returned by either public or operator catalog APIs.
+    ui_display_name: "Device Catalog Record"
+    source: "ontology-derived seed plus explicit device lifecycle decisions"
+    rendering:
+      semantic: "What this device is and whether it may operate"
+      systems: "Catalog identity and independent lifecycle states"
+      technical: "device_catalog_entry durable table; redacted API projection"
+      compliance: "Governed device master record"
+    definition: >
+      The durable platform record describing a device independently from any
+      untrusted observation or transient runtime status.
+    relationships:
+      - target: device_identity_assurance
+        type: depends_on
+        cardinality: "1:1"
+      - target: device_admission_status
+        type: depends_on
+        cardinality: "1:1"
+      - target: device_configuration_status
+        type: depends_on
+        cardinality: "1:1"
+      - target: device_enablement_status
+        type: depends_on
+        cardinality: "1:1"
+      - target: device_operational_authority
+        type: consumed_by
+        cardinality: "1:1"
+    relates_to:
+      ui_components: []
+      elements: [fotc_device_id, device_identity_binding, device_lifecycle_decision]
+    notes: >
+      Catalog presence is not admission. Historical devices are seeded only
+      as AVAILABLE and DISABLED; they remain unable to create state, events,
+      rules, alerts, probes, commands, or other side effects until an observed
+      source identity is explicitly bound and all operational-authority axes
+      conform. The legacy DeviceDescriptor is an operational projection of
+      this record, not the lifecycle source of truth.
+
+  - id: device_admission_status
+    entity_type: owl:DatatypeProperty
+    layer: backend
+    primitive: false
+    schema_version: "0.4.0"
+    migration_status: complete
+    lifecycle_status: candidate
+    data_class: derived
+    data_type: xsd:string
+    constraint:
+      enum: [AVAILABLE, ADMITTED, REJECTED, REVOKED]
+      description: >
+        AVAILABLE = cataloged for review, not planned or accepted. ADMITTED =
+        explicitly accepted. REJECTED = explicitly denied before admission.
+        REVOKED = a prior admission was withdrawn. No status is inferred from
+        historical use or current network visibility.
+    ui_display_name: "Admission Status"
+    source: "device_catalog_entry and device_lifecycle_decision"
+    rendering:
+      semantic: "Available / Accepted / Rejected / Access withdrawn"
+      systems: "Device admission lifecycle"
+      technical: "DeviceAdmissionStatus enum"
+      compliance: "Device authorization decision"
+    definition: >
+      Whether the application has deliberately accepted a cataloged device,
+      independent of configuration, enablement, and liveness.
+    relationships:
+      - target: device_operational_authority
+        type: consumed_by
+        cardinality: "1:1"
+      - target: device_lifecycle_decision
+        type: derives_from
+        cardinality: "N:1"
+    relates_to:
+      ui_components: []
+      elements: [device_candidate_disposition, device_operational_authority]
+    notes: >
+      Existing devices are not grandfathered. Prior pairing, prior telemetry,
+      a familiar friendly_name, or a historical ontology entry does not imply
+      ADMITTED.
+
+  - id: device_configuration_status
+    entity_type: owl:DatatypeProperty
+    layer: backend
+    primitive: false
+    schema_version: "0.4.0"
+    migration_status: complete
+    lifecycle_status: candidate
+    data_class: derived
+    data_type: xsd:string
+    constraint:
+      enum: [READY_TO_CONFIGURE, CONFIGURING, CONFORMING, NONCONFORMING, WITHDRAWN, REGRESSED]
+      description: >
+        READY_TO_CONFIGURE = enough is known to begin but requirements are not
+        satisfied. CONFIGURING = explicit work is in progress. CONFORMING =
+        the current descriptor, identity, protocol, lineage, and security
+        profile satisfy the ontology-derived contract. NONCONFORMING = never
+        or not currently valid. WITHDRAWN = conformance intentionally removed
+        by a change. REGRESSED = a previously conforming record failed a later
+        validation or integration regression.
+    ui_display_name: "Configuration Status"
+    source: "ontology-derived configuration validation and lifecycle decisions"
+    rendering:
+      semantic: "Ready to set up / Setting up / Ready / Needs attention"
+      systems: "Configuration conformance lifecycle"
+      technical: "DeviceConfigurationStatus enum"
+      compliance: "Configuration control status"
+    definition: >
+      Whether a device's complete current configuration conforms to the
+      ontology-derived schema and security contract, independent of whether it
+      has been admitted or enabled.
+    relationships:
+      - target: device_operational_authority
+        type: consumed_by
+        cardinality: "1:1"
+      - target: device_lifecycle_decision
+        type: derives_from
+        cardinality: "N:1"
+    relates_to:
+      ui_components: []
+      elements: [device_identity_assurance, fotc_device_id, device_location_formatted]
+    notes: >
+      A descriptor boolean cannot represent this axis. Configuration includes
+      the expected type/capabilities, adapter and source identity, location,
+      semantic role, lineage, and required publisher/network controls.
+
+  - id: device_enablement_status
+    entity_type: owl:DatatypeProperty
+    layer: backend
+    primitive: false
+    schema_version: "0.4.0"
+    migration_status: complete
+    lifecycle_status: candidate
+    data_class: derived
+    data_type: xsd:string
+    constraint:
+      enum: [ENABLED, DISABLED]
+      description: >
+        Explicit operator intent for an admitted, configured device to
+        participate. It maps to DeviceDescriptor.enabled but does not encode
+        admission or configuration conformance.
+    ui_display_name: "Enablement Status"
+    source: "device_catalog_entry.enablement_status"
+    rendering:
+      semantic: "On / Off"
+      systems: "Enabled / Disabled"
+      technical: "DeviceEnablementStatus enum; DeviceDescriptor.enabled projection"
+      compliance: "Operational enablement control"
+    definition: >
+      Whether an operator currently wants the device to participate, separate
+      from whether it is known, admitted, configured, or alive.
+    relationships:
+      - target: device_operational_authority
+        type: consumed_by
+        cardinality: "1:1"
+      - target: device_lifecycle_decision
+        type: derives_from
+        cardinality: "N:1"
+    relates_to:
+      ui_components: []
+      elements: [device_admission_status, device_configuration_status]
+    notes: >
+      ENABLED never repairs missing admission or nonconforming configuration.
+      DISABLED never means NOT_CONFIGURED.
+
+  - id: device_identity_binding
+    entity_type: owl:Class
+    layer: backend
+    primitive: false
+    schema_version: "0.4.0"
+    migration_status: complete
+    lifecycle_status: candidate
+    data_class: composite
+    data_type: owl:Class
+    constraint:
+      description: >
+        Explicit one-to-one binding from source_type + immutable or
+        equivalently authoritative source_identity to one fotc_device_id,
+        with actor, decision timestamp, and source evidence.
+    ui_display_name: "Verified Device Binding"
+    source: "approved device catalog decision"
+    rendering:
+      semantic: "This observed device is the accepted device"
+      systems: "Source identity bound to catalog device"
+      technical: "device_identity_binding(source_type, source_identity, device_id)"
+      compliance: "Approved identity binding"
+    definition: >
+      The explicit association that lets an observed source resolve to a
+      platform device ID without trusting a friendly name, topic fragment, or
+      first-seen order.
+    relationships:
+      - target: device_observation_candidate
+        type: derives_from
+        cardinality: "1:1"
+      - target: fotc_device_id
+        type: controls
+        cardinality: "1:1"
+      - target: device_identity_assurance
+        type: consumed_by
+        cardinality: "1:1"
+      - target: device_operational_authority
+        type: consumed_by
+        cardinality: "1:1"
+    relates_to:
+      ui_components: []
+      elements: [zigbee_ieee_address, fotc_device_id]
+    notes: >
+      For Zigbee the source identity is the IEEE address. For other protocols
+      it must be the strongest identity that integration can authenticate;
+      topic names and camera labels alone remain candidates until the
+      publisher/ACL or hardware identity is explicitly validated. The catalog
+      service refuses to admit a Zigbee candidate whose source identity does
+      not match zigbee_ieee_address; the `unverified-friendly:` fallback is
+      retained for review only and can never become VERIFIED.
+
+  - id: device_lifecycle_decision
+    entity_type: owl:Class
+    layer: backend
+    primitive: true
+    schema_version: "0.4.0"
+    migration_status: complete
+    lifecycle_status: candidate
+    data_class: raw
+    data_type: owl:Class
+    constraint:
+      description: >
+        Append-only record containing decision_id, candidate_id and/or
+        device_id, action, actor_type, actor_id, reason, and decided_at.
+        Actions include admit, reject, reconsider, revoke, set_configuration,
+        enable, and disable.
+    ui_display_name: "Device Lifecycle Decision"
+    source: "authenticated human review or explicitly authorized system scan"
+    rendering:
+      semantic: "Who changed this device and why"
+      systems: "Lifecycle decision history"
+      technical: "device_lifecycle_decision append-only table"
+      compliance: "Device admission and configuration audit trail"
+    definition: >
+      An immutable, attributable decision that changes a candidate or catalog
+      lifecycle axis while preserving prior outcomes for review and recovery.
+    relationships:
+      - target: device_candidate_disposition
+        type: triggers
+        cardinality: "N:1"
+      - target: device_admission_status
+        type: triggers
+        cardinality: "N:1"
+      - target: device_configuration_status
+        type: triggers
+        cardinality: "N:1"
+      - target: device_enablement_status
+        type: triggers
+        cardinality: "N:1"
+      - target: audit_log
+        type: consumed_by
+        cardinality: "1:N"
+    relates_to:
+      ui_components: []
+      elements: [device_observation_candidate, device_identity_binding]
+    notes: >
+      Reconsider is not admit. Re-enabling is not reconfiguration. Each axis
+      requires its own decision so recovery never destroys the rejected or
+      regressed history that made the record recognizable.
+
+  - id: device_lifecycle_actor_authorization
+    entity_type: owl:DatatypeProperty
+    layer: backend
+    primitive: false
+    schema_version: "0.4.0"
+    migration_status: complete
+    lifecycle_status: used
+    first_used:
+      date: "2026-08-09"
+      ref: "DeviceLifecycleAccessPolicy"
+    data_class: derived
+    data_type: xsd:boolean
+    constraint:
+      description: >
+        true only when Google authentication established a verified email and
+        that normalized email is present in the explicitly configured device
+        lifecycle operator allowlist. A missing or empty allowlist fails
+        closed and disables lifecycle decisions.
+    ui_display_name: "Device Lifecycle Operator Authorization"
+    source: >
+      GoogleAuthInterceptor verified email plus
+      cabin.security.deviceAdmission.allowedEmails
+    transformation: >
+      verified request email -> normalize -> exact allowlist membership ->
+      authorized; missing identity, mismatch, or absent configuration -> false
+    rendering:
+      semantic: "Allowed to review and approve devices"
+      systems: "Lifecycle operator: Authorized / Denied"
+      technical: "DeviceLifecycleAccessPolicy.requireActor()"
+      compliance: "Attributable device-control authorization"
+    definition: >
+      The fail-closed permission for a human to review candidates or change
+      admission, configuration, and enablement lifecycle axes.
+    relationships:
+      - target: device_lifecycle_decision
+        type: controls
+        cardinality: "1:N"
+      - target: device_identity_binding
+        type: controls
+        cardinality: "1:N"
+    relates_to:
+      ui_components: []
+      elements: [device_lifecycle_decision, device_identity_binding]
+    notes: >
+      Google authentication alone is insufficient for high-consequence device
+      decisions. Catalog and legacy config reads are also restricted because
+      source identities, observation metadata, and adapter configuration are
+      operationally sensitive; connection strings remain redacted even from
+      authorized API responses.
+
+  - id: device_operational_authority
+    entity_type: owl:DatatypeProperty
+    layer: backend
+    primitive: false
+    schema_version: "0.4.0"
+    migration_status: complete
+    lifecycle_status: candidate
+    data_class: derived
+    data_type: xsd:boolean
+    constraint:
+      description: >
+        true only when an observed source resolves through an approved verified
+        device_identity_binding and the catalog entry is ADMITTED, CONFORMING,
+        and ENABLED. Missing data and every other combination are false.
+    ui_display_name: "Operational Authority"
+    source: "DeviceCatalogService.authorizedEntryForObservation/deviceId"
+    transformation: >
+      source identity -> verified identity binding -> catalog entry ->
+      admission=ADMITTED AND configuration=CONFORMING AND enablement=ENABLED
+      -> true; otherwise false
+    rendering:
+      semantic: "Allowed to operate / Not allowed to operate"
+      systems: "Operationally authorized: Yes / No"
+      technical: "fail-closed DeviceCatalogEntry.operationallyAuthorized()"
+      compliance: "Effective device authorization"
+    definition: >
+      The sole derived permission for a device to create runtime status,
+      telemetry, events, rule inputs, alerts, probes, commands, managed IDs,
+      or application/network side effects.
+    relationships:
+      - target: device_identity_binding
+        type: depends_on
+        cardinality: "1:1"
+      - target: device_identity_assurance
+        type: depends_on
+        cardinality: "1:1"
+      - target: device_admission_status
+        type: derives_from
+        cardinality: "1:1"
+      - target: device_configuration_status
+        type: derives_from
+        cardinality: "1:1"
+      - target: device_enablement_status
+        type: derives_from
+        cardinality: "1:1"
+      - target: device_checkin_status
+        type: consumed_by
+        cardinality: "1:1"
+    relates_to:
+      ui_components: []
+      elements: [device_identity_binding, device_admission_status, device_configuration_status, device_enablement_status]
+    notes: >
+      This is a permission decision, not a health signal. An authorized device
+      may later be LATE or MISSED. An unauthorized device may be physically
+      online and chatty but remains inert to the application.
+
   - id: device_checkin_status
     entity_type: owl:DatatypeProperty
     layer: backend
@@ -918,31 +1489,28 @@ elements:
     data_class: derived
     data_type: xsd:string
     constraint:
-      enum: [ON_SCHEDULE, LATE, MISSED, NOT_CONFIGURED]
+      enum: [ON_SCHEDULE, LATE, MISSED]
       description: >
-        Distinct axis from device_state. ON_SCHEDULE = reported within its
-        expected interval. LATE = past that interval but not yet confirmed
-        unreachable (grace tier, device_state stays whatever it was).
-        MISSED = past a 3x grace multiple, and for ha_rest devices only
-        after an active poll (DeviceRegistry.activeFetch) also failed --
-        device_state flips to OFFLINE at this tier, same trigger point as
-        before this entity existed. NOT_CONFIGURED = descriptor disabled
-        (not yet installed) or missing; staleness tracking is skipped
-        entirely, so a disabled device is never reported as broken.
+        Applies only when device_operational_authority=true. ON_SCHEDULE =
+        reported within its expected interval. LATE = past that interval but
+        not yet confirmed unreachable. MISSED = past a 3x grace multiple and,
+        where supported, after the ontology-defined active probe also failed.
+        Unauthorized devices have no check-in status; their admission,
+        configuration, and enablement axes explain why they are inert.
     ui_display_name: "Checkin Status"
     rendering:
-      semantic: "Is this actually broken, or just hasn't checked in yet"
-      systems: "Late checking in / Not responding / Not configured badges (Device Manager, Monitoring)"
-      technical: "GET /api/devices/checkin-status -> { [deviceId]: status }; checkinStatusLabel() (App.jsx) overrides the state-badge text/class, never for ALARM/CRITICAL"
+      semantic: "Is this accepted device checking in"
+      systems: "On schedule / Late / Not responding"
+      technical: "GET /api/devices/checkin-status -> { [authorizedDeviceId]: ON_SCHEDULE|LATE|MISSED }"
       compliance: (not shown)
     definition: >
-      User report, 2026-08-08, verbatim: "devices that show offline are
-      not necessarily offline just not reporting. this is misleading."
-      device_state's binary ONLINE/OFFLINE conflated "hasn't pushed an
-      update yet" with "confirmed unreachable" -- this entity is the
-      user-facing fix, computed by DeviceHealthMonitor.checkHealth() every
-      60s cycle alongside (not instead of) device_state.
+      The liveness schedule classification for an operationally authorized
+      device, kept separate from admission, configuration conformance,
+      enablement, and device_state.
     relationships:
+      - target: device_operational_authority
+        type: depends_on
+        cardinality: "1:1"
       - target: device_state
         type: complements
         cardinality: "1:1"
@@ -957,23 +1525,14 @@ elements:
         cardinality: "1:N"
     relates_to:
       ui_components: [ui_device_manager_panel, ui_monitoring_panel]
-      elements: [device_state]
+      elements: [device_operational_authority, device_state]
     notes: >
-      SCOPE NOTE (honest, not silently narrowed): the user's full ask was
-      four named states ("checking in on schedule" / "not checked in on
-      schedule" / "hasn't checked in" / "not configured" -- all four are
-      covered here) plus "a listener with an HA, mq, or rules based
-      (automation check) way to know... based on assumption that it's
-      only bad if... attempts to ping it aren't successful." The active
-      ping half is built for ha_rest devices (DeviceRegistry.
-      activeFetch() calls the real HomeAssistantAdapter.fetchState() --
-      a genuine HTTP round-trip, not a simulation). MQTT/Zigbee devices
-      derive active verification from z2m_retained_availability_probe_result:
-      only ONLINE recovers a stale device; OFFLINE and NO_REPLY fail closed.
-      RTSP camera devices derive active verification from
-      rtsp_socket_reachable. A successful connect-and-drop recovers check-in;
-      failure does not suppress LATE or MISSED. The probe is deliberately
-      narrower than camera_health_panel's Frigate FPS signal.
+      This corrects the 2026-08-08 implementation's conflation of disabled
+      and not configured under NOT_CONFIGURED. Disabled is enablement;
+      configuration has its own lifecycle. Home devices described in code but
+      never purchased or installed are AVAILABLE, READY_TO_CONFIGURE, and
+      DISABLED, with no check-in row and no alert authority. MQTT/Zigbee and
+      RTSP active probes remain liveness evidence only after authority exists.
 
   - id: rtsp_stream_uri
     entity_type: owl:DatatypeProperty
@@ -1104,21 +1663,21 @@ elements:
         min: 0
       description: >
         Count of DeviceStatus.state=OFFLINE records eligible to drive the
-        existing navigation warning. Excludes descriptors with enabled=false
-        and any device classified NOT_CONFIGURED.
+        existing navigation warning. A record is eligible only while
+        device_operational_authority=true.
     ui_display_name: "Offline Devices Needing Attention"
     source: "GET /api/system/health alertEligibleOffline"
     transformation: >
-      DeviceRegistry.all -> filter state=OFFLINE -> exclude descriptor
-      enabled=false or device_checkin_status=NOT_CONFIGURED -> count
+      DeviceRegistry.all operational records -> filter state=OFFLINE -> count
     rendering:
       semantic: "Devices that are offline and expected to be working"
       systems: "Alert-eligible offline devices: N"
       technical: "system health JSON field alertEligibleOffline"
       compliance: (not shown)
     definition: >
-      The number of offline devices that are configured and therefore eligible
-      to contribute to the existing device-attention warning condition.
+      The number of offline devices that have verified identity, are admitted,
+      conforming, and enabled, and therefore may contribute to the existing
+      device-attention warning condition.
     relationships:
       - target: device_state
         type: derives_from
@@ -1126,15 +1685,17 @@ elements:
       - target: device_checkin_status
         type: derives_from
         cardinality: "N:1"
+      - target: device_operational_authority
+        type: depends_on
+        cardinality: "N:1"
     relates_to:
       ui_components: [ui_device_manager_panel, ui_monitoring_panel]
-      elements: [device_state, device_checkin_status]
+      elements: [device_state, device_checkin_status, device_operational_authority]
     notes: >
-      Narrow mitigation only. This does not redesign severity, identify the
-      affected device in the warning, change alarm handling, or remove the
-      current per-panel opt-in behavior. The raw system-health offline count
-      remains available for diagnostics. Candidate until verified in the
-      running UI/backend; tests do not establish live use.
+      Availability, rejection, admission, conformance, and disablement are not
+      offline conditions and cannot trigger this warning. The raw system-health
+      offline count remains available for diagnostics. Candidate until
+      verified in the running UI/backend; tests do not establish live use.
 
   - id: mqtt_message_retained
     entity_type: owl:DatatypeProperty
@@ -2390,6 +2951,16 @@ elements:
   # physical device is meant), and isn't Reusable/repeatable without that
   # same external dependency. See PRODUCT_VISION.md's FAIR cross-walk.
   # WORKED EXAMPLE (2026-08-07) — template for the rest of this mesh.
+  # IDENTITY/ADMISSION CLARIFICATION (2026-08-09) — the 2026-08-07
+  # bridge/devices capture and contemporaneous state messages establish
+  # historical presence, source-reported make/model, purpose, capabilities,
+  # and friendly-name lineage. They do not supply the IEEE-to-catalog
+  # bindings needed for current operational authority. Repository searches
+  # found no purchase-source/date records specific enough to strengthen an
+  # individual binding, so none are invented. All 13 records are cataloged
+  # as AVAILABLE, READY_TO_CONFIGURE, DISABLED, and UNRESOLVED until their
+  # live IEEE identities are observed and explicitly admitted; there is no
+  # grandfathering from prior pairing or from these ontology descriptions.
   # ═══════════════════════════════════════════════════════════════════════
 
   - id: zigbee_leak_alarm_bathroom
@@ -3933,12 +4504,14 @@ elements:
 
       NOT YET BUILT: an equivalent home-hub-side presence automation
       (home isn't deployed) and any UI/backend concept of a formal
-      "tracked person" registry -- personId today is just whatever
-      string a publisher's topic uses (e.g. "nate"), auto-discovered the
-      same way DeviceRegistry auto-registers unknown devices, not tied to
-      family_profile records. Linking personId to a real family_profile
-      (for a friendlier "Nate is home" label instead of a raw id) is a
-      reasonable small follow-up, not done here.
+      "tracked person" registry -- personId today is just the final segment
+      of an admitted publisher's topic (e.g. "nate"), not tied to
+      family_profile records. As of 2026-08-09, an unrecognized presence
+      topic creates only a retained device_observation_candidate and cannot
+      alter PresenceSignalRegistry or active_presence_profile. Linking an
+      admitted personId to a real family_profile (for a friendlier "Nate is
+      home" label instead of a raw id) is a reasonable follow-up, not done
+      here.
 
   - id: automation_cabin_security_publish_presence_at_startup
     entity_type: owl:Class

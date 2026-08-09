@@ -30,6 +30,15 @@
 > Family Hub too. See the revised Item 5 below for the concrete
 > recommendation. This file is being kept current in place per its own
 > §5 instruction rather than left stale.
+>
+> **Codex continuation, 2026-08-09:** Item 1's MQTT/Zigbee availability
+> work has been reconciled with the ontology and the user's explicit device
+> security semantics. Admission, configuration, enablement, and liveness are
+> now independent. Unknown observations are durable review candidates only;
+> rejected sources remain recognizable; operational state requires a verified
+> source binding plus `ADMITTED`, `CONFORMING`, and `ENABLED`. Existing devices
+> are not grandfathered. The earlier synthetic `NOT_CONFIGURED` liveness state
+> has been removed. No live deployment or Google Drive access occurred.
 
 ---
 
@@ -222,7 +231,7 @@ in the frontend suite as of that commit).
 **One commit newer** (after this handoff doc was first written, same
 session, before actually stopping): **Item 1 below (device checkin-status)
 got a real, tested first increment** — `CheckinStatus` enum
-(`ON_SCHEDULE`/`LATE`/`MISSED`/`NOT_CONFIGURED`), `DeviceHealthMonitor`
+(`ON_SCHEDULE`/`LATE`/`MISSED`), `DeviceHealthMonitor`
 tiering with a real active HA poll before escalating past the grace tier,
 `GET /api/devices/checkin-status`, and Device Manager/Monitoring badge
 wiring. Full detail in `ROADMAP.md`'s Phase 7 (newest entry) and
@@ -271,8 +280,8 @@ have been started.** Full context for each:
 
 **Built this session** (see `ROADMAP.md`'s Phase 7 newest entry,
 `docs/ontology.yaml`'s `device_checkin_status`): a new `CheckinStatus`
-enum — `ON_SCHEDULE` / `LATE` / `MISSED` / `NOT_CONFIGURED`, matching the
-user's four named states — computed by `DeviceHealthMonitor` every 60s
+enum — `ON_SCHEDULE` / `LATE` / `MISSED` — computed by
+`DeviceHealthMonitor` every 60s
 cycle as an *additional* axis alongside `DeviceStatus.state`, not a
 replacement (nothing that reads `state` needed to change). A device gets
 a grace tier (LATE) before anything downstream calls it OFFLINE; `state`
@@ -286,13 +295,32 @@ sandbox, so only graceful-degradation was actually confirmed there — see
 "still open" below).
 
 **The active-verification half is real but partial**, and this is stated
-explicitly rather than left implied-complete: for `ha_rest` devices only,
+explicitly rather than left implied-complete: for `ha_rest` devices,
 `DeviceRegistry.activeFetch()` calls the real `HomeAssistantAdapter.
 fetchState()` (a genuine HTTP round-trip to HA, not a simulation) before a
 device is allowed to escalate to MISSED — if that poll succeeds, the
 device recovers immediately regardless of how stale it looked. This is
 the actual "ping it, only bad if attempts aren't successful" mechanism
-the user asked for, just scoped to one protocol.
+the user asked for. MQTT/Zigbee retained availability and RTSP socket
+reachability now provide separate protocol-specific checks as described below.
+
+**Ontology/security correction built 2026-08-09:** the first increment's
+`NOT_CONFIGURED` value conflated configuration with enablement and liveness.
+It is removed. `DeviceCatalogService` now stores retained candidates, catalog
+entries, explicit identity bindings, and append-only lifecycle decisions.
+Discovery cannot allocate a runtime device. Only a bound catalog entry whose
+independent states are `ADMITTED`, `CONFORMING`, and `ENABLED` can create state,
+events, rule inputs, alerts, probes, or commands. The 13 historical Cabin
+Zigbee records and 14 described Home prospects are seeded only as `AVAILABLE`,
+`READY_TO_CONFIGURE`, `DISABLED`, and unbound; there is no grandfathering.
+Rejected candidates remain rejected when they resurface, while an attributable
+operator may reconsider a false negative without auto-admitting it. Lifecycle
+review requires Google authentication plus an explicit operator allowlist;
+connection material is redacted from catalog and legacy config APIs.
+The owner-facing review UI, live IEEE adjudication for the 13 existing devices,
+non-Zigbee publisher/ACL evidence, and production migration remain open and
+require an explicitly approved live session. Direct legacy Device Manager
+add/edit/remove calls now fail closed rather than bypassing the lifecycle.
 
 **Still open, if picking this item back up:**
 - **MQTT/Zigbee retained-availability check is now built** — stale Z2M
@@ -327,15 +355,15 @@ the user asked for, just scoped to one protocol.
   Frigate-based cabin cameras go through `CameraHealthPanel` (separate,
   already-existing FPS-based labeling, untouched by this change) rather
   than `DeviceRegistry`'s checkin tracking. Home's RTSP camera
-  descriptors *do* flow through `DeviceRegistry` (and are currently all
-  `enabled: false`, so they show NOT_CONFIGURED instead of a scary OFFLINE).
-  The warning path was checked and did still read the raw system-health
-  `offline` count. Fork-side mitigation now adds ontology-governed
-  `alert_eligible_offline_count` and makes `useNavAlerts` consume it, excluding
-  disabled/NOT_CONFIGURED devices without hiding the raw diagnostic total.
-  Backend targeted tests 18/18; frontend 62/62; full backend 89/92, with only
-  the same 3 Docker/Testcontainers startup errors. This specific mitigation
-  is not yet verified live, and the larger alert UX retrenchment remains open.
+  prospects exist in `DeviceCatalogService` as `AVAILABLE` but do not flow
+  through `DeviceRegistry` at all. Consequently they have no check-in row,
+  raw offline state, event, or warning authority. This replaces the earlier
+  disabled/`NOT_CONFIGURED` mitigation with the stronger ontology boundary:
+  only operational devices can be counted by `alert_eligible_offline_count`.
+  Focused lifecycle/MQTT/Zigbee/health/security tests pass 57/57. The full
+  backend run passes 105/108; only the same three Docker/Testcontainers tests
+  fail to start. This has not been verified live, and the larger alert UX
+  retrenchment remains open.
 
 ### Item 2 — Camera auth should inherit from Family Hub, single persistent OAuth
 

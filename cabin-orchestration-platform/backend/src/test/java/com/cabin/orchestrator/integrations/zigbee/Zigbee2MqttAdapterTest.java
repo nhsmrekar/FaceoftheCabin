@@ -1,6 +1,12 @@
 package com.cabin.orchestrator.integrations.zigbee;
 
 import com.cabin.orchestrator.devices.DeviceRegistry;
+import com.cabin.orchestrator.devices.catalog.DeviceCatalogEntry;
+import com.cabin.orchestrator.devices.catalog.DeviceCatalogService;
+import com.cabin.orchestrator.devices.catalog.DeviceObservationCandidate;
+import com.cabin.orchestrator.devices.model.DeviceCapability;
+import com.cabin.orchestrator.devices.model.DeviceDescriptor;
+import com.cabin.orchestrator.devices.model.DeviceType;
 import com.cabin.orchestrator.kafka.EventPublisher;
 import com.cabin.orchestrator.signalquality.SignalQualityRegistry;
 import org.eclipse.paho.client.mqttv3.MqttMessage;
@@ -11,10 +17,12 @@ import org.junit.jupiter.api.Test;
 import java.lang.reflect.Field;
 import java.time.Duration;
 import java.util.List;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
+import static com.cabin.orchestrator.devices.catalog.DeviceCatalogTestSupport.authorize;
 
 /**
  * Targeted coverage for the 2026-08-08 SignalQualityRegistry wiring --
@@ -26,14 +34,18 @@ import static org.mockito.Mockito.*;
 class Zigbee2MqttAdapterTest {
 
     private DeviceRegistry registry;
+    private DeviceCatalogService catalog;
     private SignalQualityRegistry signalQualityRegistry;
     private Zigbee2MqttAdapter adapter;
+    private EventPublisher eventPublisher;
 
     @BeforeEach
     void setUp() {
-        registry = new DeviceRegistry(List.of());
+        catalog = DeviceCatalogService.inMemory();
+        registry = new DeviceRegistry(List.of(), catalog);
         signalQualityRegistry = new SignalQualityRegistry();
-        adapter = new Zigbee2MqttAdapter(registry, new EventPublisher(), signalQualityRegistry);
+        eventPublisher = mock(EventPublisher.class);
+        adapter = new Zigbee2MqttAdapter(registry, catalog, eventPublisher, signalQualityRegistry);
     }
 
     private void deliver(String topic, String payload) throws Exception {
@@ -41,11 +53,25 @@ class Zigbee2MqttAdapterTest {
     }
 
     /** Matches real Z2M startup order: bridge/devices always arrives before any device state message. */
-    private void registerDevice(String friendlyName) throws Exception {
+    private void observeDevice(String friendlyName, String ieeeAddress) throws Exception {
         deliver("zigbee2mqtt/bridge/devices", """
-            [{"friendly_name":"%s","type":"EndDevice","definition":{
-              "model":"SNZB-03PR2","description":"motion","vendor":"SONOFF","exposes":[]}}]
-            """.formatted(friendlyName));
+            [{"friendly_name":"%s","ieee_address":"%s","type":"EndDevice",
+              "interview_completed":true,"disabled":false,"definition":{
+              "model":"SNZB-03PR2","description":"motion","vendor":"SONOFF",
+              "exposes":[{"type":"binary","property":"occupancy","access":1}]}}]
+            """.formatted(friendlyName, ieeeAddress));
+    }
+
+    private void registerDevice(String friendlyName) throws Exception {
+        String ieeeAddress = "0x00124b0012345678";
+        observeDevice(friendlyName, ieeeAddress);
+        DeviceDescriptor descriptor = new DeviceDescriptor("z2m-" + friendlyName,
+            "Entry Motion Sensor", DeviceType.MOTION_SENSOR,
+            Set.of(DeviceCapability.TELEMETRY, DeviceCapability.PRESENCE),
+            "mqtt", "zigbee2mqtt/" + friendlyName, true, "cabin");
+        DeviceCatalogEntry entry = authorize(catalog, "ZIGBEE2MQTT", ieeeAddress, descriptor);
+        observeDevice(friendlyName, ieeeAddress); // roster refresh activates the admitted entry
+        assertTrue(registry.descriptor(entry.deviceId()).isPresent());
     }
 
     @Test
@@ -89,6 +115,41 @@ class Zigbee2MqttAdapterTest {
         deliver("zigbee2mqtt/never_registered", "{\"linkquality\": 160}");
 
         assertTrue(signalQualityRegistry.assess("z2m-never_registered").isEmpty());
+    }
+
+    @Test
+    void rosterObservationCreatesAvailableCandidateButNoRuntimeStateOrEvent() throws Exception {
+        String ieee = "0x00124b00aaa00001";
+        observeDevice("neighbor_motion", ieee);
+
+        DeviceObservationCandidate candidate = catalog.candidateForObservation(
+            "ZIGBEE2MQTT", ieee).orElseThrow();
+        assertEquals("AVAILABLE", candidate.disposition().name());
+        assertNull(registry.get("z2m-neighbor_motion"));
+
+        deliver("zigbee2mqtt/neighbor_motion", "{\"linkquality\":160,\"occupancy\":true}");
+
+        assertNull(registry.get("z2m-neighbor_motion"));
+        assertTrue(signalQualityRegistry.assess("z2m-neighbor_motion").isEmpty());
+        verifyNoInteractions(eventPublisher);
+    }
+
+    @Test
+    void rejectedIeeeResurfacesAsRejectedAndStillCannotRegister() throws Exception {
+        String ieee = "0x00124b00aaa00002";
+        observeDevice("intrusive_motion", ieee);
+        DeviceObservationCandidate first = catalog.candidateForObservation(
+            "ZIGBEE2MQTT", ieee).orElseThrow();
+        catalog.rejectCandidate(first.candidateId(), "owner@example.com", "not part of this property");
+
+        observeDevice("intrusive_motion", ieee);
+        DeviceObservationCandidate resurfaced = catalog.candidateForObservation(
+            "ZIGBEE2MQTT", ieee).orElseThrow();
+
+        assertEquals(first.candidateId(), resurfaced.candidateId());
+        assertEquals("REJECTED", resurfaced.disposition().name());
+        assertEquals(2, resurfaced.seenCount());
+        assertNull(registry.get("z2m-intrusive_motion"));
     }
 
     @Test

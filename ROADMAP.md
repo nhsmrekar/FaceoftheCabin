@@ -60,7 +60,7 @@ Conceptually unified cabin intelligence service, technically decomposed:
 | `mosquitto` | MQTT broker / event bus |
 | `node-red` | Flow automation and integration glue |
 | `home-assistant` | Device state, UI overrides, appliance integrations |
-| `zigbee2mqtt` | Zigbee sensor ingestion (14 devices paired) |
+| `zigbee2mqtt` | Zigbee sensor ingestion (13 physical devices historically observed in the retained roster) |
 | `sensor-adapters` | Bosch dishwasher, LG ThinQ washer, Liebherr fridge |
 
 ### 3.3 Shared Platform Services — `api.unicornpingpong.com`
@@ -886,15 +886,20 @@ ontology_version: "1.0"          # Add this — migration tooling needs a versio
       mitigation worth doing separately/first: exclude known-undeployed-
       location devices from the offline-alert condition so the banner at
       least stops firing for a permanently-known-non-issue.
-      **Immediate mitigation built on the fork, 2026-08-08**: ontology-first
-      `alert_eligible_offline_count` preserves the raw diagnostic `offline`
-      total but excludes descriptors with `enabled=false` and check-ins with
-      `NOT_CONFIGURED`; `useNavAlerts` consumes the new count with an old-
-      backend fallback. Alarm behavior and the five larger UX gaps above are
-      unchanged, so this major item correctly remains open. Backend targeted
-      tests 18/18; frontend 62/62; full backend 89/92, with only the same 3
-      Docker/Testcontainers tests unable to start. Not yet verified against
-      the live M920q UI.
+      **Immediate mitigation built on the fork, 2026-08-08; ontology-corrected
+      2026-08-09**: the first version excluded disabled descriptors through a
+      synthetic `NOT_CONFIGURED` check-in state. That conflated independent
+      lifecycle axes. The current contract removes unauthorized records from
+      `DeviceRegistry` entirely: no identity binding, admission, configuration
+      conformance, or enablement means no runtime status, liveness row, raw
+      offline count, event, rule input, command, or alert eligibility.
+      `alert_eligible_offline_count` therefore counts only operational devices
+      that are actually `MISSED`. Alarm behavior and the five larger UX gaps
+      above are unchanged, so this major item correctly remains open. The
+      lifecycle/MQTT/Zigbee/health/security focused backend set passes 57/57;
+      the full backend run passes 105/108 with only the same three
+      Docker/Testcontainers startup errors. Live M920q verification remains
+      unperformed.
 - [ ] **[NEW FEATURE, PLANNING NEEDED]** WiFi RSSI-based presence/
       proximity detection — user's proposal, 2026-08-08: ping
       signal-strength/intensity between wired devices (smart switches
@@ -1141,15 +1146,14 @@ ontology_version: "1.0"          # Add this — migration tooling needs a versio
       yet" from "actually unreachable"** (user report, 2026-08-08, verbatim
       in `docs/ontology.yaml`'s new `device_checkin_status` entity). Added
       a second, additive status axis (`CheckinStatus`: ON_SCHEDULE / LATE
-      / MISSED / NOT_CONFIGURED) computed by `DeviceHealthMonitor` every
+      / MISSED) computed by `DeviceHealthMonitor` every
       60s cycle alongside — not instead of — the existing `DeviceStatus.
       state`. A device now gets a grace tier (LATE) before anything reads
       OFFLINE; `ha_rest` devices additionally get a real active poll
       (`DeviceRegistry.activeFetch()` → `HomeAssistantAdapter.fetchState()`,
       a genuine HTTP round-trip) attempted before escalating to MISSED —
       only MISSED still flips `state` to OFFLINE, same trigger point as
-      before. Disabled/not-yet-installed devices report NOT_CONFIGURED
-      and skip staleness tracking entirely. New `GET /api/devices/
+      before. New `GET /api/devices/
       checkin-status` endpoint; `checkinStatusLabel()` (App.jsx) overrides
       the Device Manager and Monitoring badges, never for ALARM/CRITICAL.
       6 new backend tests (`DeviceHealthMonitorTest`, pure classification
@@ -1183,6 +1187,31 @@ ontology_version: "1.0"          # Add this — migration tooling needs a versio
       verified from the running backend. Targeted RTSP/monitor tests: 16/16;
       full backend run: 87/90, with only the same 3 Docker/Testcontainers
       tests unable to start because Docker is unavailable.
+      **Ontology/security correction, 2026-08-09**: `NOT_CONFIGURED` was
+      removed because configuration, enablement, admission, and liveness are
+      independent. Discovery now writes durable, bounded observation
+      candidates only. Rejected candidates remain rejected when they
+      resurface and may be reconsidered without automatic admission. A source
+      may enter runtime only after explicit identity binding plus `ADMITTED`,
+      `CONFORMING`, and `ENABLED`; all pre-existing Zigbee records and Home
+      prospects are seeded `AVAILABLE` and `DISABLED` with no grandfathering.
+      Unknown MQTT/Zigbee/camera/presence/security/direct-event sources cannot
+      allocate device state or publish events. Lifecycle review is protected
+      by Google authentication plus an explicit operator-email allowlist, and
+      connection material is redacted from both catalog and legacy config
+      APIs. The bootstrap database schema now mirrors the four durable catalog
+      tables. Repository and Git evidence can support probable/corroborated
+      make/model/purpose assertions, but never replaces a verified source
+      binding. Focused backend verification: 57/57; full backend: 105/108,
+      with only the three known Docker/Testcontainers startup errors.
+      **Still open after this slice**: build the owner-facing candidate review
+      UI; capture and adjudicate the 13 live IEEE bindings with the user
+      present; add ontology-backed publisher/ACL evidence for non-Zigbee MQTT
+      identities; and perform an explicitly approved production migration.
+      Until then the fail-closed catalog state is intentional, not a
+      grandfathering defect. The legacy Device Manager add/edit/remove calls
+      now return a conflict directing callers to the lifecycle workflow rather
+      than bypassing it.
 - [x] **Rules & Alerts always showed one Node-RED regardless of location
       context** (user report, 2026-08-08, verbatim: "I only see one node
       red... same context shift behavior for all locations"). `RulesPanel`
@@ -1447,24 +1476,34 @@ its IP is known, rather than guessing at exact commands now.
 
 ## Appendix — Paired Zigbee Devices
 
-All 14 devices paired and renamed to canonical snake_case ontology IDs:
+The 2026-08-07 retained Zigbee2MQTT roster recorded 13 physical devices
+renamed to canonical snake_case ontology IDs. This is historical identity
+evidence, not current admission: no IEEE addresses are stored in this repo, so
+all 13 remain `AVAILABLE`, `READY_TO_CONFIGURE`, `DISABLED`, and `UNRESOLVED`
+until live IEEE identities are observed and explicitly bound. Later live-roster
+ontology records are the stronger source for model names where older notes
+conflict; purchase-source/date evidence specific enough to strengthen an
+individual binding was not found and is not invented.
 
 | Ontology ID | Device | Location |
 |-------------|--------|----------|
 | `motion_entry` | SONOFF SNZB-03PR2 SenseGuard Motion Gen2 | cabin entry |
 | `door_front_contact` | SONOFF SNZB-04P | front door |
 | `door_second_contact` | SONOFF SNZB-04P | secondary door |
-| `temp_outside_lowest` | SONOFF SNZB-02WD | outside back door |
+| `temp_outside_lowest` | SONOFF SNZB-02LD | outside back door |
 | `temp_kitchen` | SONOFF SNZB-02WD | upstairs/kitchen |
-| `leak_mech_room` | THIRDREALITY leak sensor | basement floor |
+| `leak_mech_room` | SONOFF SNZB-05P | basement floor |
 | `leak_alarm_fridge` | THIRDREALITY leak sensor | fridge area |
 | `leak_alarm_dishwasher` | THIRDREALITY leak sensor | dishwasher area |
 | `leak_alarm_bathroom` | THIRDREALITY leak sensor | bath/toilet/tub |
 | `temp_mech_room` | SONOFF SNZB-02WD | basement breaker box area |
 | `heater_mech_room` | THIRDREALITY smart plug | plumbing heater auto-switch |
-| `main_water_valve` | Zigbee clamp-on actuator | 3/4" main water shutoff |
+| `main_water_valve` | Tuya TS0001 relay | 3/4" main water shutoff |
 | `smart_switch_breaker_box` | THIRDREALITY smart plug | fan/heater for mech room humidity |
-| `water_leak_buzzer` | THIRDREALITY buzzer | repurposed 120dB intrusion siren |
+
+`water_leak_buzzer` is a writable property on each THIRDREALITY 3RWS18BZ leak
+sensor, not a fourteenth physical device. Any siren repurposing is a separate
+semantic/automation role and does not create another hardware identity.
 
 ---
 

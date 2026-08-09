@@ -295,8 +295,8 @@ describe("checkinStatusLabel", () => {
     expect(checkinStatusLabel("OFFLINE", "MISSED")).toEqual({ text: "Not responding", cls: "state-offline" });
   });
 
-  it("shows NOT_CONFIGURED for disabled/not-yet-installed devices", () => {
-    expect(checkinStatusLabel("UNKNOWN", "NOT_CONFIGURED")).toEqual({ text: "Not configured", cls: "state-not-configured" });
+  it("does not turn an unknown lifecycle value into a liveness label", () => {
+    expect(checkinStatusLabel("UNKNOWN", "NOT_CONFIGURED")).toBeNull();
   });
 
   it("falls through to the raw state for ON_SCHEDULE or missing data", () => {

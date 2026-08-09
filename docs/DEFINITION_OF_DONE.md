@@ -212,10 +212,13 @@ accumulate.*
   indicator anywhere in the UI at the time). Needs a real design pass
   against the "See, Think, Act" Northstar goals, not a patch. See
   `ROADMAP.md`'s matching entry for the full finding. Fork-side immediate
-  mitigation is built and tested: disabled/NOT_CONFIGURED devices no longer
-  contribute to `alert_eligible_offline_count`, while the raw offline total
-  remains diagnostic. The larger design item stays open, and the mitigation
-  has not yet been verified in the live M920q UI.
+  mitigation is built and ontology-corrected: catalog-only, unbound,
+  unadmitted, nonconforming, or disabled devices never enter DeviceRegistry,
+  so they cannot contribute to raw health, `alert_eligible_offline_count`,
+  events, rules, commands, or alerts. `CheckinStatus` applies only to
+  operational devices and no longer contains the conflated `NOT_CONFIGURED`
+  value. The larger design item stays open, and the correction has not yet
+  been verified in the live M920q UI.
 - **Reolink (`front_door`) camera still physically off-network** — needs
   on-site checking (power, WiFi re-pairing). Not fixable remotely.
 - **`blinkbridge`'s no-clip crash is fixed (2026-08-08)** — a transient

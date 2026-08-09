@@ -855,14 +855,13 @@ function stateColor(state) {
 // users (2026-08-08 report) — it doesn't distinguish "hasn't checked in
 // yet" from "confirmed unreachable." checkinStatus (from
 // GET /api/devices/checkin-status, backed by DeviceHealthMonitor's
-// ON_SCHEDULE/LATE/MISSED/NOT_CONFIGURED tiering) is the more honest
+// ON_SCHEDULE/LATE/MISSED tiering) is the more honest
 // label; this only overrides the badge for the ambiguous cases and never
 // touches an ALARM/CRITICAL device, which must always read as itself.
 export function checkinStatusLabel(state, checkinStatus) {
   const s = (state || "").toUpperCase();
   if (s === "ALARM" || s === "CRITICAL") return null;
   switch (checkinStatus) {
-    case "NOT_CONFIGURED": return { text: "Not configured", cls: "state-not-configured" };
     case "LATE":            return { text: "Late checking in", cls: "state-late" };
     case "MISSED":           return { text: "Not responding", cls: "state-offline" };
     default: return null; // ON_SCHEDULE, or no data yet — show the raw state

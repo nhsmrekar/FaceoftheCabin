@@ -74,14 +74,16 @@ public class DeviceHealthMonitor {
     @Scheduled(fixedDelay = 60_000)
     public void checkHealth() {
         Instant now = Instant.now();
-        for (DeviceStatus status : registry.all()) {
+        List<DeviceStatus> operationalDevices = registry.all();
+        Set<String> operationalIds = operationalDevices.stream()
+            .map(DeviceStatus::deviceId).collect(java.util.stream.Collectors.toSet());
+        checkinStatuses.keySet().retainAll(operationalIds);
+        staleSince.keySet().retainAll(operationalIds);
+        lastKnownState.keySet().retainAll(operationalIds);
+        reconnectAttempts.keySet().retainAll(operationalIds);
+        for (DeviceStatus status : operationalDevices) {
             String id = status.deviceId();
             Optional<DeviceDescriptor> descriptor = registry.descriptor(id);
-
-            if (descriptor.isPresent() && !descriptor.get().enabled()) {
-                checkinStatuses.put(id, CheckinStatus.NOT_CONFIGURED);
-                continue;
-            }
 
             Duration staleThreshold = staleThresholdFor(id, status);
             Duration sinceLastSeen = Duration.between(status.lastSeen(), now);
@@ -99,7 +101,7 @@ public class DeviceHealthMonitor {
             }
 
             Duration missedThreshold = staleThreshold.multipliedBy(MISSED_MULTIPLIER);
-            CheckinStatus classified = classify(sinceLastSeen, staleThreshold, missedThreshold, true);
+            CheckinStatus classified = classify(sinceLastSeen, staleThreshold, missedThreshold);
             checkinStatuses.put(id, classified);
 
             if (!staleSince.containsKey(id)) {
@@ -121,8 +123,7 @@ public class DeviceHealthMonitor {
     }
 
     /** Pure classification: given how late a device is, which tier is it in. Package-private for tests. */
-    static CheckinStatus classify(Duration sinceLastSeen, Duration staleThreshold, Duration missedThreshold, boolean enabled) {
-        if (!enabled) return CheckinStatus.NOT_CONFIGURED;
+    static CheckinStatus classify(Duration sinceLastSeen, Duration staleThreshold, Duration missedThreshold) {
         if (sinceLastSeen.compareTo(staleThreshold) <= 0) return CheckinStatus.ON_SCHEDULE;
         if (sinceLastSeen.compareTo(missedThreshold) <= 0) return CheckinStatus.LATE;
         return CheckinStatus.MISSED;
@@ -235,9 +236,8 @@ public class DeviceHealthMonitor {
     }
 
     private boolean isAlertEligibleOffline(DeviceStatus status) {
-        if (!"OFFLINE".equals(status.state())) return false;
-        if (registry.descriptor(status.deviceId()).map(d -> !d.enabled()).orElse(false)) return false;
-        return checkinStatuses.get(status.deviceId()) != CheckinStatus.NOT_CONFIGURED;
+        // DeviceRegistry contains operationally authorized devices only.
+        return "OFFLINE".equals(status.state());
     }
 
     /** Per-device checkin status, keyed by deviceId. Devices not yet checked this cycle are omitted. */

@@ -9,9 +9,12 @@ import com.cabin.orchestrator.devices.model.DeviceStatus;
 import com.cabin.orchestrator.devices.model.DeviceType;
 import com.cabin.orchestrator.devices.model.DeviceCapability;
 import com.cabin.orchestrator.integrations.zigbee.Zigbee2MqttAdapter;
+import com.cabin.orchestrator.security.DeviceLifecycleAccessPolicy;
+import jakarta.servlet.http.HttpServletRequest;
+import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ResponseStatusException;
 
-import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -26,15 +29,18 @@ public class DeviceController {
     private final Zigbee2MqttAdapter z2mAdapter;
     private final DeviceHealthMonitor healthMonitor;
     private final DeviceDisplayConfigService displayConfigService;
+    private final DeviceLifecycleAccessPolicy lifecycleAccessPolicy;
 
     public DeviceController(DeviceRegistry registry,
                              Zigbee2MqttAdapter z2mAdapter,
                              DeviceHealthMonitor healthMonitor,
-                             DeviceDisplayConfigService displayConfigService) {
+                             DeviceDisplayConfigService displayConfigService,
+                             DeviceLifecycleAccessPolicy lifecycleAccessPolicy) {
         this.registry = registry;
         this.z2mAdapter = z2mAdapter;
         this.healthMonitor = healthMonitor;
         this.displayConfigService = displayConfigService;
+        this.lifecycleAccessPolicy = lifecycleAccessPolicy;
     }
 
     /** List all registered devices with their current state */
@@ -50,7 +56,7 @@ public class DeviceController {
     }
 
     /**
-     * Per-device checkin status (ON_SCHEDULE / LATE / MISSED / NOT_CONFIGURED) —
+     * Per-device checkin status (ON_SCHEDULE / LATE / MISSED) —
      * the "is it actually broken or just hasn't reported yet" signal, distinct
      * from DeviceStatus.state. See DeviceHealthMonitor's class comment.
      */
@@ -64,26 +70,20 @@ public class DeviceController {
     /** Register a new device (Device Manager UI → add device) */
     @PostMapping
     public DeviceDescriptor registerDevice(@RequestBody DeviceDescriptor descriptor) {
-        registry.register(new DeviceStatus(
-            descriptor.deviceId(), descriptor.type(), descriptor.name(),
-            "UNKNOWN", Instant.now(), Map.of(), descriptor.location()));
-        registry.registerDescriptor(descriptor);
-        return descriptor;
+        throw lifecycleWorkflowRequired();
     }
 
     /** Update device config */
     @PutMapping("/{deviceId}")
     public DeviceDescriptor updateDevice(@PathVariable String deviceId,
-                                          @RequestBody DeviceDescriptor descriptor) {
-        registry.registerDescriptor(descriptor);
-        return descriptor;
+                                           @RequestBody DeviceDescriptor descriptor) {
+        throw lifecycleWorkflowRequired();
     }
 
     /** Remove device */
     @DeleteMapping("/{deviceId}")
     public Map<String, String> removeDevice(@PathVariable String deviceId) {
-        registry.remove(deviceId);
-        return Map.of("removed", deviceId);
+        throw lifecycleWorkflowRequired();
     }
 
     /** Send a command to a device */
@@ -112,7 +112,9 @@ public class DeviceController {
      * Duration is in seconds; 254 = max (~4m14s).
      */
     @PostMapping("/permit-join")
-    public Map<String, Object> permitJoin(@RequestBody Map<String, Object> body) {
+    public Map<String, Object> permitJoin(@RequestBody Map<String, Object> body,
+                                          HttpServletRequest request) {
+        lifecycleAccessPolicy.requireActor(request);
         boolean enable = Boolean.TRUE.equals(body.get("enable"));
         int duration = body.containsKey("duration") ? ((Number) body.get("duration")).intValue() : 254;
         z2mAdapter.permitJoin(enable, duration);
@@ -124,7 +126,9 @@ public class DeviceController {
      * PATCH accepts a partial map; only 'name' and 'enabled' are mutable here.
      */
     @GetMapping("/{deviceId}/config")
-    public Map<String, Object> getDeviceConfig(@PathVariable String deviceId) {
+    public Map<String, Object> getDeviceConfig(@PathVariable String deviceId,
+                                                HttpServletRequest request) {
+        lifecycleAccessPolicy.requireActor(request);
         return registry.descriptor(deviceId)
             .map(d -> Map.<String, Object>of(
                 "deviceId", d.deviceId(),
@@ -132,7 +136,7 @@ public class DeviceController {
                 "type", d.type(),
                 "capabilities", d.capabilities(),
                 "protocolAdapter", d.protocolAdapter(),
-                "connectionString", d.connectionString(),
+                "connectionConfigured", !d.connectionString().isBlank(),
                 "enabled", d.enabled(),
                 "location", d.location()
             ))
@@ -141,17 +145,13 @@ public class DeviceController {
 
     @PatchMapping("/{deviceId}/config")
     public Map<String, Object> patchDeviceConfig(@PathVariable String deviceId,
-                                                  @RequestBody Map<String, Object> patch) {
-        return registry.descriptor(deviceId).map(existing -> {
-            String name    = patch.containsKey("name") ? (String) patch.get("name") : existing.name();
-            boolean enabled = patch.containsKey("enabled")
-                ? Boolean.TRUE.equals(patch.get("enabled")) : existing.enabled();
-            DeviceDescriptor updated = new DeviceDescriptor(
-                existing.deviceId(), name, existing.type(), existing.capabilities(),
-                existing.protocolAdapter(), existing.connectionString(), enabled, existing.location());
-            registry.registerDescriptor(updated);
-            return Map.<String, Object>of("updated", deviceId, "name", name, "enabled", enabled);
-        }).orElse(Map.of("error", "not found"));
+                                                   @RequestBody Map<String, Object> patch) {
+        throw lifecycleWorkflowRequired();
+    }
+
+    private ResponseStatusException lifecycleWorkflowRequired() {
+        return new ResponseStatusException(HttpStatus.CONFLICT,
+            "Direct registration/configuration is disabled; use the authenticated device catalog lifecycle workflow");
     }
 
     // ── Display-config endpoints ───────────────────────────────────────────────

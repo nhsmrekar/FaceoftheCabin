@@ -1,6 +1,11 @@
 package com.cabin.orchestrator.mqtt;
 
 import com.cabin.orchestrator.devices.DeviceRegistry;
+import com.cabin.orchestrator.devices.catalog.DeviceCatalogEntry;
+import com.cabin.orchestrator.devices.catalog.DeviceCatalogService;
+import com.cabin.orchestrator.devices.catalog.DeviceObservationCandidate;
+import com.cabin.orchestrator.devices.model.DeviceCapability;
+import com.cabin.orchestrator.devices.model.DeviceDescriptor;
 import com.cabin.orchestrator.devices.model.DeviceStatus;
 import com.cabin.orchestrator.devices.model.DeviceType;
 import com.cabin.orchestrator.kafka.EventPublisher;
@@ -15,9 +20,12 @@ import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static com.cabin.orchestrator.devices.catalog.DeviceCatalogTestSupport.authorize;
 
 /**
  * Regression coverage for the 2026-08-07 finding: handleCameraTopic()
@@ -47,48 +55,79 @@ import static org.mockito.Mockito.mock;
 class MqttBridgeServiceTest {
 
     private DeviceRegistry registry;
+    private DeviceCatalogService catalog;
     private PresenceService presenceService;
     private PresenceSignalRegistry presenceSignalRegistry;
     private SecurityStateRegistry securityStateRegistry;
     private MqttBridgeService bridge;
+    private EventPublisher eventPublisher;
 
     @BeforeEach
     void setUp() {
-        registry = new DeviceRegistry(List.of());
+        catalog = DeviceCatalogService.inMemory();
+        registry = new DeviceRegistry(List.of(), catalog);
         presenceSignalRegistry = new PresenceSignalRegistry();
         presenceService = new PresenceService(mock(JdbcTemplate.class), presenceSignalRegistry);
         securityStateRegistry = new SecurityStateRegistry();
-        bridge = new MqttBridgeService(registry, new EventPublisher(), presenceService, presenceSignalRegistry, securityStateRegistry);
+        eventPublisher = mock(EventPublisher.class);
+        bridge = new MqttBridgeService(registry, catalog, eventPublisher,
+            presenceService, presenceSignalRegistry, securityStateRegistry);
     }
 
     private void deliver(String topic, String payload) throws Exception {
         bridge.messageArrived(topic, new MqttMessage(payload.getBytes()));
     }
 
+    private DeviceCatalogEntry authorizeCamera(String cameraId) {
+        String sourceIdentity = "cabin/camera/" + cameraId;
+        return authorize(catalog, "FRIGATE_CAMERA", sourceIdentity,
+            new DeviceDescriptor(cameraId, "Camera " + cameraId, DeviceType.CAMERA,
+                Set.of(DeviceCapability.STREAM, DeviceCapability.PRESENCE),
+                "mqtt", sourceIdentity, true, "cabin"));
+    }
+
+    private void authorizePresence(String location, String personId) {
+        String sourceIdentity = location + "/presence/" + personId;
+        authorize(catalog, "MQTT_PRESENCE_SOURCE", sourceIdentity,
+            new DeviceDescriptor("presence-" + location + "-" + personId,
+                "Presence source", DeviceType.HOME_ASSISTANT_ENTITY,
+                Set.of(DeviceCapability.PRESENCE), "mqtt", sourceIdentity, true, location));
+    }
+
+    private void authorizeSecurity(String location) {
+        String sourceIdentity = location + "/security/armed_away";
+        authorize(catalog, "MQTT_SECURITY_SOURCE", sourceIdentity,
+            new DeviceDescriptor("security-" + location + "-armed-away",
+                "Security state source", DeviceType.HOME_ASSISTANT_ENTITY,
+                Set.of(DeviceCapability.TELEMETRY), "mqtt", sourceIdentity, true, location));
+    }
+
     @Test
-    void motionTopicAutoRegistersAndMarksCameraOnline() throws Exception {
+    void unknownCameraIsRetainedAsAvailableButCannotChangeStateOrPublish() throws Exception {
         assertNull(registry.get("driveway"));
 
         deliver("cabin/camera/driveway/motion", "ON");
 
-        DeviceStatus status = registry.get("driveway");
-        assertNotNull(status, "camera should be auto-registered on first motion message");
-        assertEquals(DeviceType.CAMERA, status.type());
-        assertEquals("ONLINE", status.state());
-        assertEquals("cabin", status.location());
+        assertNull(registry.get("driveway"));
+        DeviceObservationCandidate candidate = catalog.candidateForObservation(
+            "FRIGATE_CAMERA", "cabin/camera/driveway").orElseThrow();
+        assertEquals("AVAILABLE", candidate.disposition().name());
+        verifyNoInteractions(eventPublisher);
     }
 
     @Test
     void perLabelCountTopicAlsoTouchesTheCamera() throws Exception {
+        authorizeCamera("driveway");
         deliver("cabin/camera/driveway/car", "1");
 
         DeviceStatus status = registry.get("driveway");
-        assertNotNull(status, "camera should be auto-registered from a per-label count topic too");
+        assertNotNull(status, "an authorized camera should refresh from a per-label count topic too");
         assertEquals("ONLINE", status.state());
     }
 
     @Test
     void repeatedMotionRefreshesLastSeenInsteadOfOnlyRegisteringOnce() throws Exception {
+        authorizeCamera("driveway");
         deliver("cabin/camera/driveway/motion", "OFF");
         Instant firstSeen = registry.get("driveway").lastSeen();
 
@@ -103,6 +142,7 @@ class MqttBridgeServiceTest {
 
     @Test
     void touchingACameraPreservesItsExistingAttributes() throws Exception {
+        authorizeCamera("driveway");
         deliver("cabin/camera/driveway/motion", "ON");
         // simulate an attribute a future enhancement might attach (e.g. resolution)
         DeviceStatus withAttrs = registry.get("driveway");
@@ -127,7 +167,28 @@ class MqttBridgeServiceTest {
     }
 
     @Test
+    void unknownGenericDeviceTopicCannotAllocateRuntimeStateOrPublish() throws Exception {
+        deliver("cabin/device/neighbor-sensor/state", "{\"motion\":true}");
+
+        assertNull(registry.get("neighbor-sensor"));
+        assertEquals("AVAILABLE", catalog.candidateForObservation(
+            "MQTT_DEVICE_TOPIC", "cabin/device/neighbor-sensor").orElseThrow().disposition().name());
+        verifyNoInteractions(eventPublisher);
+    }
+
+    @Test
+    void unadmittedPresenceAndSecurityTopicsCannotChangeApplicationState() throws Exception {
+        deliver("cabin/presence/intruder", "home");
+        deliver("cabin/security/armed_away", "ON");
+
+        assertTrue(presenceSignalRegistry.all().isEmpty());
+        assertFalse(presenceService.isAutoDerived());
+        assertTrue(securityStateRegistry.get("cabin").isEmpty());
+    }
+
+    @Test
     void singlePersonAtCabinDerivesAtCabin() throws Exception {
+        authorizePresence("cabin", "nate");
         deliver("cabin/presence/nate", "home");
 
         assertEquals(PresenceProfile.AT_CABIN, presenceService.get());
@@ -139,6 +200,7 @@ class MqttBridgeServiceTest {
         // Not cabin-only by design -- see PresenceSignalRegistry's comment.
         // home-hub isn't deployed yet, but the topic/derivation logic
         // itself makes no cabin-specific assumption.
+        authorizePresence("home", "emma");
         deliver("home/presence/emma", "home");
 
         assertEquals(PresenceProfile.AT_HOME, presenceService.get());
@@ -146,6 +208,8 @@ class MqttBridgeServiceTest {
 
     @Test
     void onePersonAtEachLocationSimultaneouslyDerivesBothOccupied() throws Exception {
+        authorizePresence("cabin", "nate");
+        authorizePresence("home", "emma");
         deliver("cabin/presence/nate", "home");
         deliver("home/presence/emma", "home");
 
@@ -155,6 +219,7 @@ class MqttBridgeServiceTest {
 
     @Test
     void everyoneLeavingDerivesAway() throws Exception {
+        authorizePresence("cabin", "nate");
         deliver("cabin/presence/nate", "home");
         deliver("cabin/presence/nate", "not_home");
 
@@ -165,6 +230,8 @@ class MqttBridgeServiceTest {
     void secondPersonArrivingAtSameLocationStaysAtThatLocation() throws Exception {
         // Two people, one location -- must not require exactly one person
         // per location, or double-count into some other state.
+        authorizePresence("cabin", "nate");
+        authorizePresence("cabin", "emma");
         deliver("cabin/presence/nate", "home");
         deliver("cabin/presence/emma", "home");
 
@@ -180,6 +247,7 @@ class MqttBridgeServiceTest {
         presenceService.set(PresenceProfile.AWAY); // manual override, e.g. no signal configured yet
         assertFalse(presenceService.isAutoDerived());
 
+        authorizePresence("cabin", "nate");
         deliver("cabin/presence/nate", "home");
 
         assertEquals(PresenceProfile.AT_CABIN, presenceService.get(),
@@ -193,6 +261,7 @@ class MqttBridgeServiceTest {
         // not JSON -- must be handled before the generic JSON-parse
         // fallback, or every presence message would throw and get
         // silently swallowed by messageArrived's catch block.
+        authorizePresence("cabin", "nate");
         deliver("cabin/presence/nate", "home");
 
         assertEquals(1, presenceSignalRegistry.all().size());
@@ -201,6 +270,7 @@ class MqttBridgeServiceTest {
 
     @Test
     void armedAwayOnRecordsArmedForThatLocation() throws Exception {
+        authorizeSecurity("cabin");
         deliver("cabin/security/armed_away", "ON");
 
         assertTrue(securityStateRegistry.get("cabin").orElseThrow().armed());
@@ -208,6 +278,7 @@ class MqttBridgeServiceTest {
 
     @Test
     void armedAwayOffRecordsDisarmedForThatLocation() throws Exception {
+        authorizeSecurity("cabin");
         deliver("cabin/security/armed_away", "OFF");
 
         assertFalse(securityStateRegistry.get("cabin").orElseThrow().armed());
@@ -218,6 +289,7 @@ class MqttBridgeServiceTest {
         // home-hub isn't deployed yet, but this must still work today for
         // whatever location actually publishes -- see this class's own
         // javadoc on the +/security/armed_away subscription.
+        authorizeSecurity("home");
         deliver("home/security/armed_away", "ON");
 
         assertTrue(securityStateRegistry.get("home").orElseThrow().armed());
@@ -228,6 +300,7 @@ class MqttBridgeServiceTest {
     @Test
     void armedTopicIsNotMisroutedThroughTheJsonDeviceHandler() throws Exception {
         // Plain text ("ON"/"OFF"), not JSON -- same reasoning as presence.
+        authorizeSecurity("cabin");
         deliver("cabin/security/armed_away", "ON");
 
         assertNull(registry.get("armed_away"), "an armed-state signal must never register a device");

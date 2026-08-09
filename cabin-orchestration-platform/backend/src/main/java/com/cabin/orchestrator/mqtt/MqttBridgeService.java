@@ -1,6 +1,10 @@
 package com.cabin.orchestrator.mqtt;
 
 import com.cabin.orchestrator.devices.DeviceRegistry;
+import com.cabin.orchestrator.devices.catalog.DeviceCatalogEntry;
+import com.cabin.orchestrator.devices.catalog.DeviceCatalogService;
+import com.cabin.orchestrator.devices.catalog.DeviceConfigurationStatus;
+import com.cabin.orchestrator.devices.catalog.DeviceObservation;
 import com.cabin.orchestrator.devices.model.DeviceStatus;
 import com.cabin.orchestrator.devices.model.DeviceType;
 import com.cabin.orchestrator.events.AlertSeverityClassifier;
@@ -50,6 +54,7 @@ import java.util.*;
 public class MqttBridgeService implements MqttCallback {
 
     private static final Logger log = LoggerFactory.getLogger(MqttBridgeService.class);
+    private static final int MAX_INGRESS_PAYLOAD_BYTES = 65_536;
 
     @Value("${cabin.mqtt.brokerUrl:tcp://localhost:1883}")
     private String brokerUrl;
@@ -59,16 +64,19 @@ public class MqttBridgeService implements MqttCallback {
 
     private MqttClient client;
     private final DeviceRegistry registry;
+    private final DeviceCatalogService catalog;
     private final EventPublisher eventPublisher;
     private final PresenceService presenceService;
     private final PresenceSignalRegistry presenceSignalRegistry;
     private final SecurityStateRegistry securityStateRegistry;
     private final ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
 
-    public MqttBridgeService(DeviceRegistry registry, EventPublisher eventPublisher,
+    public MqttBridgeService(DeviceRegistry registry, DeviceCatalogService catalog,
+                              EventPublisher eventPublisher,
                               PresenceService presenceService, PresenceSignalRegistry presenceSignalRegistry,
                               SecurityStateRegistry securityStateRegistry) {
         this.registry = registry;
+        this.catalog = catalog;
         this.eventPublisher = eventPublisher;
         this.presenceService = presenceService;
         this.presenceSignalRegistry = presenceSignalRegistry;
@@ -111,8 +119,12 @@ public class MqttBridgeService implements MqttCallback {
     @Override
     public void messageArrived(String topic, MqttMessage message) {
         try {
+            if (message.getPayload().length > MAX_INGRESS_PAYLOAD_BYTES) {
+                log.warn("Dropped oversized MQTT message on {} ({} bytes)", topic, message.getPayload().length);
+                return;
+            }
             String payload = new String(message.getPayload());
-            log.debug("MQTT message arrived: topic={} payload={}", topic, payload);
+            log.debug("MQTT message arrived: topic={} bytes={}", topic, message.getPayload().length);
             String[] parts = topic.split("/");
 
             if (parts.length >= 3 && "camera".equals(parts[1])) {
@@ -151,25 +163,40 @@ public class MqttBridgeService implements MqttCallback {
     }
 
     private void handleDeviceMessage(String deviceId, String msgType, Map<String, Object> data) {
-        DeviceStatus existing = registry.get(deviceId);
+        String sourceIdentity = "cabin/device/" + deviceId;
+        catalog.observe(new DeviceObservation("MQTT_DEVICE_TOPIC", sourceIdentity, deviceId,
+            Map.of("message_type", msgType, "payload_keys", data.keySet().stream().sorted().toList())));
+        Optional<DeviceCatalogEntry> authorized = catalog.authorizedEntryForObservation(
+            "MQTT_DEVICE_TOPIC", sourceIdentity);
+        if (authorized.isEmpty()) return;
+        DeviceCatalogEntry entry = authorized.get();
+        if (!"mqtt".equals(entry.protocolAdapter()) || !sourceIdentity.equals(entry.connectionString())) {
+            regress(entry, "Observed MQTT topic no longer matches the admitted catalog descriptor");
+            return;
+        }
+        registry.registerDescriptor(entry.descriptor());
+        DeviceStatus existing = registry.get(entry.deviceId());
         if (existing == null) {
-            // Auto-register unknown device — type inferred from payload keys, location from topic prefix
-            DeviceType type = inferType(data);
-            String loc = deviceId.startsWith("home-") ? "home" : "cabin";
-            existing = new DeviceStatus(deviceId, type, deviceId, "UNKNOWN", Instant.now(), Map.of(), loc);
-            log.info("Auto-registered new device: {} as {} at {}", deviceId, type, loc);
+            return;
         }
         Map<String, Object> attrs = new LinkedHashMap<>(existing.attributes());
         attrs.putAll(data);
-        String state = determineState(data, existing.type());
-        registry.update(new DeviceStatus(deviceId, existing.type(), existing.name(), state,
+        String state = determineState(data);
+        registry.update(new DeviceStatus(entry.deviceId(), existing.type(), existing.name(), state,
             Instant.now(), attrs, existing.location()));
 
         // Publish to Kafka for rules engine consumption
         CabinEvent event = new CabinEvent(
-            UUID.randomUUID().toString(), deviceId, "TELEMETRY",
+            UUID.randomUUID().toString(), entry.deviceId(), "TELEMETRY",
             AlertSeverityClassifier.classify(data), Instant.now(), data);
         eventPublisher.publish(event);
+    }
+
+    private void regress(DeviceCatalogEntry entry, String reason) {
+        if (entry.configurationStatus() == DeviceConfigurationStatus.CONFORMING) {
+            catalog.setConfiguration(entry.deviceId(), DeviceConfigurationStatus.REGRESSED,
+                "SYSTEM", "mqtt-bridge", reason);
+        }
     }
 
     // Frigate's real topic shapes under cabin/camera/ (confirmed against a
@@ -201,16 +228,17 @@ public class MqttBridgeService implements MqttCallback {
             handleFrigateDetectionEvent(payload);
         } else if (parts.length == 4 && "motion".equals(parts[3])) {
             String cameraId = parts[2];
-            touchCamera(cameraId);
-            String state = "ON".equalsIgnoreCase(payload.trim()) ? "MOTION_ON" : "MOTION_OFF";
-            eventPublisher.publish(new CabinEvent(
-                UUID.randomUUID().toString(), cameraId, state,
-                "INFO", Instant.now(), Map.of("camera", cameraId)));
+            touchCamera(cameraId, "motion").ifPresent(authorizedId -> {
+                String state = "ON".equalsIgnoreCase(payload.trim()) ? "MOTION_ON" : "MOTION_OFF";
+                eventPublisher.publish(new CabinEvent(
+                    UUID.randomUUID().toString(), authorizedId, state,
+                    "INFO", Instant.now(), Map.of("camera", authorizedId)));
+            });
         } else if (parts.length == 4) {
             // per-label object-count topic, e.g. cabin/camera/driveway/car —
             // not published as a CabinEvent (fires too often to be useful,
             // see below), but still real evidence the camera is alive.
-            touchCamera(parts[2]);
+            touchCamera(parts[2], "object_count");
         }
         // `available` is deliberately still not handled here: it's
         // Frigate's single bridge-wide topic (parts.length==2), doesn't
@@ -220,23 +248,26 @@ public class MqttBridgeService implements MqttCallback {
         // useful "events", even though they're useful for touchCamera().
     }
 
-    /**
-     * Marks a camera as seen right now — auto-registers it (same pattern
-     * handleDeviceMessage uses for cabin/device/# devices) if this is the
-     * first time this camera ID has appeared, otherwise just refreshes
-     * lastSeen/state on the existing entry without touching its other
-     * attributes.
-     */
-    private void touchCamera(String cameraId) {
-        DeviceStatus existing = registry.get(cameraId);
-        if (existing == null) {
-            registry.update(new DeviceStatus(cameraId, DeviceType.CAMERA, cameraId, "ONLINE",
-                Instant.now(), Map.of(), "cabin"));
-            log.info("Auto-registered new camera: {}", cameraId);
-            return;
+    /** Retain any camera label, but touch runtime state only after admission. */
+    private Optional<String> touchCamera(String cameraId, String signal) {
+        String sourceIdentity = "cabin/camera/" + cameraId;
+        catalog.observe(new DeviceObservation("FRIGATE_CAMERA", sourceIdentity, cameraId,
+            Map.of("signal", signal)));
+        Optional<DeviceCatalogEntry> authorized = catalog.authorizedEntryForObservation(
+            "FRIGATE_CAMERA", sourceIdentity);
+        if (authorized.isEmpty()) return Optional.empty();
+        DeviceCatalogEntry entry = authorized.get();
+        if (!"mqtt".equals(entry.protocolAdapter()) || !sourceIdentity.equals(entry.connectionString())
+            || entry.type() != DeviceType.CAMERA) {
+            regress(entry, "Observed Frigate camera source no longer matches the admitted catalog descriptor");
+            return Optional.empty();
         }
+        registry.registerDescriptor(entry.descriptor());
+        DeviceStatus existing = registry.get(entry.deviceId());
+        if (existing == null) return Optional.empty();
         registry.update(new DeviceStatus(existing.deviceId(), existing.type(), existing.name(),
             "ONLINE", Instant.now(), existing.attributes(), existing.location()));
+        return Optional.of(entry.deviceId());
     }
 
     /**
@@ -255,6 +286,10 @@ public class MqttBridgeService implements MqttCallback {
     private void handlePresenceTopic(String[] parts, String payload) {
         String location = parts[0];
         String personId = parts[2];
+        String sourceIdentity = location + "/presence/" + personId;
+        catalog.observe(new DeviceObservation("MQTT_PRESENCE_SOURCE", sourceIdentity,
+            "presence-" + location + "-" + personId, Map.of("location", location, "person_id", personId)));
+        if (catalog.authorizedEntryForObservation("MQTT_PRESENCE_SOURCE", sourceIdentity).isEmpty()) return;
         boolean present = "home".equalsIgnoreCase(payload.trim());
         presenceSignalRegistry.record(location, personId, present);
         presenceService.recomputeFromSignals();
@@ -271,6 +306,10 @@ public class MqttBridgeService implements MqttCallback {
      * ambiguous alert needs and couldn't get from the UI at all.
      */
     private void handleArmedTopic(String location, String payload) {
+        String sourceIdentity = location + "/security/armed_away";
+        catalog.observe(new DeviceObservation("MQTT_SECURITY_SOURCE", sourceIdentity,
+            "security-" + location + "-armed-away", Map.of("location", location)));
+        if (catalog.authorizedEntryForObservation("MQTT_SECURITY_SOURCE", sourceIdentity).isEmpty()) return;
         boolean armed = "ON".equalsIgnoreCase(payload.trim());
         securityStateRegistry.record(location, armed);
     }
@@ -282,6 +321,8 @@ public class MqttBridgeService implements MqttCallback {
             String type = String.valueOf(data.getOrDefault("type", "unknown"));
             Map<String, Object> after = (Map<String, Object>) data.getOrDefault("after", Map.of());
             String camera = String.valueOf(after.getOrDefault("camera", "unknown"));
+            Optional<String> authorizedCameraId = touchCamera(camera, "detection_event");
+            if (authorizedCameraId.isEmpty()) return;
             String label = String.valueOf(after.getOrDefault("label", "object"));
             // Frigate's own event id (TrackedObject.to_dict()'s "id" field) --
             // required to fetch that specific event's snapshot/clip via
@@ -296,7 +337,7 @@ public class MqttBridgeService implements MqttCallback {
             eventPayload.put("hasSnapshot", after.getOrDefault("has_snapshot", false));
             eventPayload.put("hasClip", after.getOrDefault("has_clip", false));
             CabinEvent event = new CabinEvent(
-                UUID.randomUUID().toString(), camera,
+                UUID.randomUUID().toString(), authorizedCameraId.get(),
                 "DETECTION_" + type.toUpperCase(),
                 "INFO", Instant.now(), eventPayload);
             eventPublisher.publish(event);
@@ -306,7 +347,15 @@ public class MqttBridgeService implements MqttCallback {
     }
 
     private void handleDirectEvent(String severity, Map<String, Object> data) {
-        String deviceId = String.valueOf(data.getOrDefault("deviceId", "system"));
+        String proposedDeviceId = String.valueOf(data.getOrDefault("deviceId", "system"));
+        String sourceIdentity = "cabin/event/" + severity + "/" + proposedDeviceId;
+        catalog.observe(new DeviceObservation("MQTT_DIRECT_EVENT", sourceIdentity,
+            proposedDeviceId, Map.of("severity", severity,
+                "payload_keys", data.keySet().stream().sorted().toList())));
+        Optional<DeviceCatalogEntry> authorized = catalog.authorizedEntryForObservation(
+            "MQTT_DIRECT_EVENT", sourceIdentity);
+        if (authorized.isEmpty()) return;
+        String deviceId = authorized.get().deviceId();
         String eventType = String.valueOf(data.getOrDefault("event", "UNKNOWN"));
         CabinEvent event = new CabinEvent(
             UUID.randomUUID().toString(), deviceId, eventType,
@@ -314,16 +363,7 @@ public class MqttBridgeService implements MqttCallback {
         eventPublisher.publish(event);
     }
 
-    private DeviceType inferType(Map<String, Object> data) {
-        if (data.containsKey("psi"))     return DeviceType.WATER_PRESSURE_SENSOR;
-        if (data.containsKey("temp_f"))  return DeviceType.TEMPERATURE_SENSOR;
-        if (data.containsKey("alarm"))   return DeviceType.SMOKE_ALARM;
-        if (data.containsKey("locked"))  return DeviceType.LOCK;
-        if (data.containsKey("motion"))  return DeviceType.MOTION_SENSOR;
-        return DeviceType.HOME_ASSISTANT_ENTITY;
-    }
-
-    private String determineState(Map<String, Object> data, DeviceType type) {
+    private String determineState(Map<String, Object> data) {
         Object alarm = data.get("alarm");
         if (Boolean.TRUE.equals(alarm)) return "ALARM";
         return "ONLINE";

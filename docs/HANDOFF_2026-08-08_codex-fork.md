@@ -328,12 +328,14 @@ the user asked for, just scoped to one protocol.
   already-existing FPS-based labeling, untouched by this change) rather
   than `DeviceRegistry`'s checkin tracking. Home's RTSP camera
   descriptors *do* flow through `DeviceRegistry` (and are currently all
-  `enabled: false`, so they now correctly show NOT_CONFIGURED instead of
-  a scary OFFLINE — a likely, but unconfirmed, side-benefit for the
-  already-logged "Warning banner firing on 5 undeployed Home cameras"
-  item in `docs/DEFINITION_OF_DONE.md`'s punch list; worth checking
-  whether that alert path actually reads this new signal or something
-  else entirely before claiming it's fixed).
+  `enabled: false`, so they show NOT_CONFIGURED instead of a scary OFFLINE).
+  The warning path was checked and did still read the raw system-health
+  `offline` count. Fork-side mitigation now adds ontology-governed
+  `alert_eligible_offline_count` and makes `useNavAlerts` consume it, excluding
+  disabled/NOT_CONFIGURED devices without hiding the raw diagnostic total.
+  Backend targeted tests 18/18; frontend 62/62; full backend 89/92, with only
+  the same 3 Docker/Testcontainers startup errors. This specific mitigation
+  is not yet verified live, and the larger alert UX retrenchment remains open.
 
 ### Item 2 — Camera auth should inherit from Family Hub, single persistent OAuth
 

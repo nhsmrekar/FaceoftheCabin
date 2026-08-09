@@ -2446,6 +2446,11 @@ function loadAlertCfg() {
   catch { return {}; }
 }
 
+export function alertEligibleOfflineCount(health) {
+  if (typeof health?.alertEligibleOffline === "number") return health.alertEligibleOffline;
+  return health?.offline || 0; // compatibility with an older backend during rollout
+}
+
 // cfg shape per panel: { enabled: bool, alertSince: ms|null }
 function useNavAlerts() {
   const [cfg, setCfg] = useState(loadAlertCfg);
@@ -2468,7 +2473,7 @@ function useNavAlerts() {
 
       const now       = Date.now();
       const hasAlarm  = (h.alarm  || 0) > 0;
-      const hasOffline= (h.offline || 0) > 0;
+      const hasOffline= alertEligibleOfflineCount(h) > 0;
       const alertCondition = hasAlarm || hasOffline; // true = something needs attention
 
       setCfg(prev => {

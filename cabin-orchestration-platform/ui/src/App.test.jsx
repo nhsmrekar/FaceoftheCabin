@@ -1,7 +1,7 @@
 import React from "react";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
-import { isCameraEvent, mergeHubLocations, buildCameraEventsUrl, isLocationDeployed, formatPresenceSignals, formatArmedTitle, cameraHealthLabel, allLocationsLabel, checkinStatusLabel, AppContext, FamilyHubPanel, FamilyConfigPanel, RulesPanel } from "./App.jsx";
+import { isCameraEvent, mergeHubLocations, buildCameraEventsUrl, isLocationDeployed, formatPresenceSignals, formatArmedTitle, cameraHealthLabel, allLocationsLabel, checkinStatusLabel, alertEligibleOfflineCount, AppContext, FamilyHubPanel, FamilyConfigPanel, RulesPanel } from "./App.jsx";
 import { ThemeProvider } from "./ThemeProvider.jsx";
 
 // Covers the actual reported bug this session ("Camera Events" showing
@@ -302,6 +302,18 @@ describe("checkinStatusLabel", () => {
   it("falls through to the raw state for ON_SCHEDULE or missing data", () => {
     expect(checkinStatusLabel("ONLINE", "ON_SCHEDULE")).toBeNull();
     expect(checkinStatusLabel("ONLINE", undefined)).toBeNull();
+  });
+});
+
+describe("alertEligibleOfflineCount", () => {
+  it("uses the ontology-governed configured-device count when available", () => {
+    expect(alertEligibleOfflineCount({ offline: 5, alertEligibleOffline: 0 })).toBe(0);
+    expect(alertEligibleOfflineCount({ offline: 5, alertEligibleOffline: 2 })).toBe(2);
+  });
+
+  it("falls back to the legacy offline total during a mixed-version rollout", () => {
+    expect(alertEligibleOfflineCount({ offline: 3 })).toBe(3);
+    expect(alertEligibleOfflineCount(null)).toBe(0);
   });
 });
 

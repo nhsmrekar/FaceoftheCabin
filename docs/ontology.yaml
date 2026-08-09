@@ -1090,6 +1090,52 @@ elements:
       Candidate with the RTSP probe. Kept bounded so one unreachable camera
       cannot hold DeviceHealthMonitor indefinitely.
 
+  - id: alert_eligible_offline_count
+    entity_type: owl:DatatypeProperty
+    layer: backend
+    primitive: false
+    schema_version: "0.4.0"
+    migration_status: complete
+    lifecycle_status: candidate
+    data_class: derived
+    data_type: xsd:integer
+    constraint:
+      range:
+        min: 0
+      description: >
+        Count of DeviceStatus.state=OFFLINE records eligible to drive the
+        existing navigation warning. Excludes descriptors with enabled=false
+        and any device classified NOT_CONFIGURED.
+    ui_display_name: "Offline Devices Needing Attention"
+    source: "GET /api/system/health alertEligibleOffline"
+    transformation: >
+      DeviceRegistry.all -> filter state=OFFLINE -> exclude descriptor
+      enabled=false or device_checkin_status=NOT_CONFIGURED -> count
+    rendering:
+      semantic: "Devices that are offline and expected to be working"
+      systems: "Alert-eligible offline devices: N"
+      technical: "system health JSON field alertEligibleOffline"
+      compliance: (not shown)
+    definition: >
+      The number of offline devices that are configured and therefore eligible
+      to contribute to the existing device-attention warning condition.
+    relationships:
+      - target: device_state
+        type: derives_from
+        cardinality: "N:1"
+      - target: device_checkin_status
+        type: derives_from
+        cardinality: "N:1"
+    relates_to:
+      ui_components: [ui_device_manager_panel, ui_monitoring_panel]
+      elements: [device_state, device_checkin_status]
+    notes: >
+      Narrow mitigation only. This does not redesign severity, identify the
+      affected device in the warning, change alarm handling, or remove the
+      current per-panel opt-in behavior. The raw system-health offline count
+      remains available for diagnostics. Candidate until verified in the
+      running UI/backend; tests do not establish live use.
+
   - id: mqtt_message_retained
     entity_type: owl:DatatypeProperty
     layer: protocol

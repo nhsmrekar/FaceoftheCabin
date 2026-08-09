@@ -230,4 +230,35 @@ class DeviceHealthMonitorTest {
         assertEquals(CheckinStatus.MISSED, monitor.getCheckinStatuses().get("camera-test"));
         assertEquals("OFFLINE", registry.get("camera-test").state());
     }
+
+    @Test
+    void disabledOfflineDeviceRemainsInDiagnosticTotalButNotAlertEligibleCount() {
+        DeviceRegistry registry = new DeviceRegistry(java.util.List.of());
+        registry.registerDescriptor(new DeviceDescriptor("camera-disabled", "Future Camera", DeviceType.CAMERA,
+            Set.of(DeviceCapability.STREAM), "rtsp", "rtsp://camera:554/stream", false, "home"));
+        registry.update(new DeviceStatus("camera-disabled", DeviceType.CAMERA, "Future Camera", "OFFLINE",
+            Instant.now().minus(Duration.ofDays(1)), Map.of(), "home"));
+        DeviceHealthMonitor monitor = monitorWith(registry);
+
+        monitor.checkHealth();
+        Map<String, Object> health = monitor.getSystemHealth();
+
+        assertEquals(1L, health.get("offline"));
+        assertEquals(0L, health.get("alertEligibleOffline"));
+        assertEquals(CheckinStatus.NOT_CONFIGURED, monitor.getCheckinStatuses().get("camera-disabled"));
+    }
+
+    @Test
+    void enabledOfflineDeviceIsAlertEligible() {
+        DeviceRegistry registry = new DeviceRegistry(java.util.List.of());
+        registry.registerDescriptor(new DeviceDescriptor("device-enabled", "Expected Device", DeviceType.ROUTER,
+            Set.of(DeviceCapability.TELEMETRY), "unknown", "", true, "cabin"));
+        registry.update(new DeviceStatus("device-enabled", DeviceType.ROUTER, "Expected Device", "OFFLINE",
+            Instant.now().minus(Duration.ofHours(2)), Map.of(), "cabin"));
+        DeviceHealthMonitor monitor = monitorWith(registry);
+
+        monitor.checkHealth();
+
+        assertEquals(1L, monitor.getSystemHealth().get("alertEligibleOffline"));
+    }
 }

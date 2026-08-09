@@ -202,6 +202,7 @@ public class DeviceHealthMonitor {
         List<DeviceStatus> all = registry.all();
         long online  = all.stream().filter(d -> "ONLINE".equals(d.state())).count();
         long offline = all.stream().filter(d -> "OFFLINE".equals(d.state())).count();
+        long alertEligibleOffline = all.stream().filter(this::isAlertEligibleOffline).count();
         long alarm   = all.stream().filter(d -> "ALARM".equals(d.state())).count();
         long unknown = all.stream().filter(d -> "UNKNOWN".equals(d.state())).count();
 
@@ -223,6 +224,7 @@ public class DeviceHealthMonitor {
             "total", all.size(),
             "online", online,
             "offline", offline,
+            "alertEligibleOffline", alertEligibleOffline,
             "alarm", alarm,
             "unknown", unknown,
             "zigbeeBridge", z2mAdapter.getBridgeState(),
@@ -230,6 +232,12 @@ public class DeviceHealthMonitor {
             "checkinStatusCounts", checkinCounts,
             "checkedAt", Instant.now().toString()
         );
+    }
+
+    private boolean isAlertEligibleOffline(DeviceStatus status) {
+        if (!"OFFLINE".equals(status.state())) return false;
+        if (registry.descriptor(status.deviceId()).map(d -> !d.enabled()).orElse(false)) return false;
+        return checkinStatuses.get(status.deviceId()) != CheckinStatus.NOT_CONFIGURED;
     }
 
     /** Per-device checkin status, keyed by deviceId. Devices not yet checked this cycle are omitted. */

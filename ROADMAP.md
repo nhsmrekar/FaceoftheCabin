@@ -886,6 +886,15 @@ ontology_version: "1.0"          # Add this — migration tooling needs a versio
       mitigation worth doing separately/first: exclude known-undeployed-
       location devices from the offline-alert condition so the banner at
       least stops firing for a permanently-known-non-issue.
+      **Immediate mitigation built on the fork, 2026-08-08**: ontology-first
+      `alert_eligible_offline_count` preserves the raw diagnostic `offline`
+      total but excludes descriptors with `enabled=false` and check-ins with
+      `NOT_CONFIGURED`; `useNavAlerts` consumes the new count with an old-
+      backend fallback. Alarm behavior and the five larger UX gaps above are
+      unchanged, so this major item correctly remains open. Backend targeted
+      tests 18/18; frontend 62/62; full backend 89/92, with only the same 3
+      Docker/Testcontainers tests unable to start. Not yet verified against
+      the live M920q UI.
 - [ ] **[NEW FEATURE, PLANNING NEEDED]** WiFi RSSI-based presence/
       proximity detection — user's proposal, 2026-08-08: ping
       signal-strength/intensity between wired devices (smart switches

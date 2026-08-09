@@ -211,7 +211,11 @@ accumulate.*
   alarm behind it, no per-device identification, and no armed/disarmed
   indicator anywhere in the UI at the time). Needs a real design pass
   against the "See, Think, Act" Northstar goals, not a patch. See
-  `ROADMAP.md`'s matching entry for the full finding.
+  `ROADMAP.md`'s matching entry for the full finding. Fork-side immediate
+  mitigation is built and tested: disabled/NOT_CONFIGURED devices no longer
+  contribute to `alert_eligible_offline_count`, while the raw offline total
+  remains diagnostic. The larger design item stays open, and the mitigation
+  has not yet been verified in the live M920q UI.
 - **Reolink (`front_door`) camera still physically off-network** — needs
   on-site checking (power, WiFi re-pairing). Not fixable remotely.
 - **`blinkbridge`'s no-clip crash is fixed (2026-08-08)** — a transient

@@ -1163,6 +1163,17 @@ ontology_version: "1.0"          # Add this — migration tooling needs a versio
       Targeted backend tests 17/17; full backend run 81/84 passed, with
       only the 3 pre-existing Docker/Testcontainers tests unable to start
       because Docker is unavailable in this environment.
+      **RTSP fast-follow, 2026-08-08**: enabled RTSP descriptors now use a
+      dedicated `RtspAdapter` for a bounded, credential-redacting TCP
+      connect-and-drop against `rtsp_stream_uri`. Success derives
+      `rtsp_socket_reachable=true` and may recover check-in status; failure
+      fails closed. This does not claim authenticated RTSP, decodable frames,
+      or FPS -- `camera_health_panel` remains the stream-health authority.
+      `rtsp_connect_timeout_ms` governs the 100–10000 ms bound. All three new
+      RTSP ontology concepts remain candidates until a real enabled camera is
+      verified from the running backend. Targeted RTSP/monitor tests: 16/16;
+      full backend run: 87/90, with only the same 3 Docker/Testcontainers
+      tests unable to start because Docker is unavailable.
 - [x] **Rules & Alerts always showed one Node-RED regardless of location
       context** (user report, 2026-08-08, verbatim: "I only see one node
       red... same context shift behavior for all locations"). `RulesPanel`

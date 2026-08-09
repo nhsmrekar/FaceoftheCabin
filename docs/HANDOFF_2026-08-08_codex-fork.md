@@ -306,8 +306,15 @@ the user asked for, just scoped to one protocol.
   Targeted backend tests: 17/17. Full backend run: 81/84 passed; the only
   errors were the 3 already-documented Testcontainers tests because Docker
   is unavailable in this environment.
-- **RTSP cameras (Home's 5 Reolinks) have no active check either** —
-  would need a connect-and-drop probe against the RTSP URL.
+- **RTSP connect-and-drop check is now built** — enabled RTSP descriptors
+  use a bounded TCP connection to the configured URI host/port. Success may
+  recover check-in status; failures fail closed. The ontology deliberately
+  distinguishes socket reachability from authentication, decodable frames,
+  and Frigate FPS. `rtsp_stream_uri`, `rtsp_socket_reachable`, and
+  `rtsp_connect_timeout_ms` remain candidates pending verification with a
+  real enabled camera from the running backend. Targeted RTSP/monitor tests:
+  16/16. Full backend run: 87/90; only the same 3 Docker/Testcontainers tests
+  failed to start because Docker is unavailable.
 - **Not yet verified against the real M920q backend with real devices**
   — only verified in a browser preview with the backend unreachable
   (graceful-degradation path only) and via unit/integration tests. Watch

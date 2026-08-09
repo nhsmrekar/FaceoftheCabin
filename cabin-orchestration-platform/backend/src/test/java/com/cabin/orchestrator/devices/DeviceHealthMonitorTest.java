@@ -163,6 +163,21 @@ class DeviceHealthMonitorTest {
         assertEquals("ONLINE", registry.get("z2m-motion").state());
     }
 
+    private static class FakeRtspAdapter implements ProtocolAdapter {
+        boolean respond;
+
+        @Override public String adapterType() { return "rtsp"; }
+
+        @Override public Optional<DeviceStatus> fetchState(DeviceDescriptor d) {
+            if (!respond) return Optional.empty();
+            return Optional.of(new DeviceStatus(
+                d.deviceId(), d.type(), d.name(), "ONLINE", Instant.now(),
+                Map.of("rtspSocketReachable", true), d.location()));
+        }
+
+        @Override public boolean sendCommand(DeviceDescriptor d, String c, Object p) { return false; }
+    }
+
     @Test
     void noRetainedReplyDoesNotHideMissedZigbeeDevice() {
         DeviceRegistry registry = new DeviceRegistry(java.util.List.of());
@@ -178,5 +193,41 @@ class DeviceHealthMonitorTest {
 
         assertEquals(CheckinStatus.MISSED, monitor.getCheckinStatuses().get("z2m-motion"));
         assertEquals("OFFLINE", registry.get("z2m-motion").state());
+    }
+
+    @Test
+    void rtspSocketSuccessRecoversStaleCamera() {
+        FakeRtspAdapter rtsp = new FakeRtspAdapter();
+        rtsp.respond = true;
+        DeviceRegistry registry = new DeviceRegistry(java.util.List.of(rtsp));
+        registry.registerDescriptor(new DeviceDescriptor("camera-test", "Camera", DeviceType.CAMERA,
+            Set.of(DeviceCapability.STREAM), "rtsp", "rtsp://camera:554/stream", true, "home"));
+        registry.update(new DeviceStatus("camera-test", DeviceType.CAMERA, "Camera", "ONLINE",
+            Instant.now().minus(Duration.ofMinutes(20)), Map.of("cameraFps", 12.0), "home"));
+
+        DeviceHealthMonitor monitor = monitorWith(registry);
+        monitor.checkHealth();
+
+        assertEquals(CheckinStatus.ON_SCHEDULE, monitor.getCheckinStatuses().get("camera-test"));
+        assertEquals("ONLINE", registry.get("camera-test").state());
+        assertEquals(12.0, registry.get("camera-test").attributes().get("cameraFps"),
+            "the reachability fact complements rather than replaces stream-health attributes");
+        assertEquals(Boolean.TRUE, registry.get("camera-test").attributes().get("rtspSocketReachable"));
+    }
+
+    @Test
+    void rtspSocketFailureDoesNotHideMissedCamera() {
+        FakeRtspAdapter rtsp = new FakeRtspAdapter();
+        DeviceRegistry registry = new DeviceRegistry(java.util.List.of(rtsp));
+        registry.registerDescriptor(new DeviceDescriptor("camera-test", "Camera", DeviceType.CAMERA,
+            Set.of(DeviceCapability.STREAM), "rtsp", "rtsp://camera:554/stream", true, "home"));
+        registry.update(new DeviceStatus("camera-test", DeviceType.CAMERA, "Camera", "ONLINE",
+            Instant.now().minus(Duration.ofMinutes(16)), Map.of(), "home"));
+
+        DeviceHealthMonitor monitor = monitorWith(registry);
+        monitor.checkHealth();
+
+        assertEquals(CheckinStatus.MISSED, monitor.getCheckinStatuses().get("camera-test"));
+        assertEquals("OFFLINE", registry.get("camera-test").state());
     }
 }

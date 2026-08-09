@@ -140,14 +140,22 @@ public class DeviceHealthMonitor {
                 descriptor.map(DeviceDescriptor::connectionString).orElse(""),
                 MQTT_AVAILABILITY_TIMEOUT).orElse(false);
         }
-        if (!"ha_rest".equals(adapterType)) return false;
+        if (!"ha_rest".equals(adapterType) && !"rtsp".equals(adapterType)) return false;
 
         Optional<DeviceStatus> live = registry.activeFetch(id);
         if (live.isEmpty()) return false;
 
         DeviceStatus fresh = live.get();
+        Map<String, Object> freshAttributes = fresh.attributes();
+        if ("rtsp".equals(adapterType)) {
+            DeviceStatus existing = registry.get(id);
+            Map<String, Object> merged = new LinkedHashMap<>();
+            if (existing != null) merged.putAll(existing.attributes());
+            merged.putAll(fresh.attributes());
+            freshAttributes = merged;
+        }
         registry.update(new DeviceStatus(
-            id, fresh.type(), fresh.name(), fresh.state(), now, fresh.attributes(), fresh.location()));
+            id, fresh.type(), fresh.name(), fresh.state(), now, freshAttributes, fresh.location()));
         return true;
     }
 

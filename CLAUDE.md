@@ -353,6 +353,7 @@ npm install && npm run dev
 | `HOME_HA_TOKEN` | HomeAssistantAdapter | Home HA long-lived token |
 | `HOME_HA_URL` | HomeAssistantAdapter | Default: `http://home-hub:8123` |
 | `MQTT_URL` | MqttBridgeService | Default: `tcp://localhost:1883` |
+| `RTSP_CONNECT_TIMEOUT_MS` | RtspAdapter | Bounded active camera socket-check timeout; default 2000 ms, clamped to 100–10000 ms |
 | `KAFKA_BOOTSTRAP` | EventPublisher | Default: `localhost:9092` |
 | `CAMERA_PASSWORD` | Frigate | Reolink admin password |
 | `FAMILY_DASHBOARD_URL` | DashboardController | Familia Hub URL |

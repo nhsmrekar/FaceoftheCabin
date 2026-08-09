@@ -949,6 +949,9 @@ elements:
       - target: z2m_retained_availability_probe_result
         type: derives_from
         cardinality: "1:1"
+      - target: rtsp_socket_reachable
+        type: derives_from
+        cardinality: "1:1"
       - target: audit_log
         type: consumed_by
         cardinality: "1:N"
@@ -967,8 +970,125 @@ elements:
       a genuine HTTP round-trip, not a simulation). MQTT/Zigbee devices
       derive active verification from z2m_retained_availability_probe_result:
       only ONLINE recovers a stale device; OFFLINE and NO_REPLY fail closed.
-      RTSP camera devices still have no active check; that remaining scoped
-      gap needs an RTSP connect-and-drop probe.
+      RTSP camera devices derive active verification from
+      rtsp_socket_reachable. A successful connect-and-drop recovers check-in;
+      failure does not suppress LATE or MISSED. The probe is deliberately
+      narrower than camera_health_panel's Frigate FPS signal.
+
+  - id: rtsp_stream_uri
+    entity_type: owl:DatatypeProperty
+    layer: protocol
+    primitive: true
+    schema_version: "0.4.0"
+    migration_status: complete
+    lifecycle_status: candidate
+    data_class: raw
+    data_type: xsd:anyURI
+    constraint:
+      pattern: "^rtsp://.+$"
+      description: >
+        RTSP URI with a hostname or IP address and optional explicit port;
+        default port is 554. Embedded credentials are permitted by existing
+        descriptors but must never be logged or rendered unmasked.
+    ui_display_name: "RTSP Stream Address"
+    source: "DeviceDescriptor.connectionString where protocolAdapter=rtsp"
+    rendering:
+      semantic: (not shown)
+      systems: "Camera stream address (credentials hidden)"
+      technical: "rtsp://[credentials-redacted]@host[:port]/path"
+      compliance: "Sensitive connection configuration (redacted)"
+    definition: >
+      The configured RTSP network address used to locate a camera stream,
+      including its host, optional port, and stream path.
+    relationships:
+      - target: rtsp_socket_reachable
+        type: consumed_by
+        cardinality: "1:N"
+    notes: >
+      Candidate because the five Home descriptors are disabled and have not
+      been verified against deployed cameras. This entry defines configuration,
+      not reachability or video health. Never expose URI user-info in logs.
+
+  - id: rtsp_socket_reachable
+    entity_type: owl:DatatypeProperty
+    layer: integration
+    primitive: false
+    schema_version: "0.4.0"
+    migration_status: complete
+    lifecycle_status: candidate
+    data_class: derived
+    data_type: xsd:boolean
+    constraint:
+      description: >
+        true when a TCP socket connects to the host and resolved RTSP port
+        before the configured timeout; false for invalid configuration,
+        DNS failure, timeout, refusal, or other connection failure.
+    ui_display_name: "Camera Endpoint Reachable"
+    transformation: >
+      parse redaction-safe host and port from rtsp_stream_uri -> bounded TCP
+      connect -> immediately close socket -> true on connect, false otherwise
+    rendering:
+      semantic: "Camera answered / Camera did not answer"
+      systems: "RTSP endpoint reachable: Yes / No"
+      technical: "Java Socket.connect(host, port, timeout); no RTSP request"
+      compliance: (not shown)
+    definition: >
+      Whether the configured camera host accepted a TCP connection on its
+      RTSP port during an active connect-and-drop liveness check.
+    relationships:
+      - target: rtsp_stream_uri
+        type: derives_from
+        cardinality: "N:1"
+      - target: rtsp_connect_timeout_ms
+        type: depends_on
+        cardinality: "N:1"
+      - target: device_checkin_status
+        type: consumed_by
+        cardinality: "1:N"
+      - target: camera_health_panel
+        type: complements
+        cardinality: "N:1"
+    notes: >
+      Deliberately narrow. true confirms network/service-port reachability and
+      is accepted as active check-in recovery for an enabled RTSP descriptor.
+      It does NOT prove RTSP authentication, protocol negotiation, decodable
+      frames, or camera FPS; camera_health_panel remains authoritative for
+      actual Frigate stream production. Candidate until verified against a
+      real enabled camera from the running backend.
+
+  - id: rtsp_connect_timeout_ms
+    entity_type: owl:DatatypeProperty
+    layer: backend
+    primitive: true
+    schema_version: "0.4.0"
+    migration_status: complete
+    lifecycle_status: candidate
+    data_class: raw
+    data_type: xsd:integer
+    constraint:
+      range:
+        min: 100
+        max: 10000
+      description: >
+        Bounded TCP connection timeout in milliseconds. Values outside the
+        range are clamped; default is 2000.
+    ui_display_name: "Camera Reachability Timeout"
+    source: "RTSP_CONNECT_TIMEOUT_MS -> cabin.devices.cameras.rtspConnectTimeoutMs"
+    rendering:
+      semantic: (not shown)
+      systems: "Camera check timeout: N ms"
+      technical: "cabin.devices.cameras.rtspConnectTimeoutMs (100..10000; default 2000)"
+      compliance: (not shown)
+    definition: >
+      The maximum time the active RTSP connect-and-drop check waits for a
+      camera endpoint to accept a TCP connection.
+    relationships:
+      - target: rtsp_socket_reachable
+        type: consumed_by
+        cardinality: "1:N"
+    notes: >
+      Candidate with the RTSP probe. Kept bounded so one unreachable camera
+      cannot hold DeviceHealthMonitor indefinitely.
 
   - id: mqtt_message_retained
     entity_type: owl:DatatypeProperty

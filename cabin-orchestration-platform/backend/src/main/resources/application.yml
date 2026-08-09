@@ -46,6 +46,7 @@ cabin:
       freezeRiskTempF: 38
     cameras:
       defaultProtocol: rtsp
+      rtspConnectTimeoutMs: ${RTSP_CONNECT_TIMEOUT_MS:2000}
       # Frigate reached by Docker network hostname -- cabin-backend is on
       # cabin_default (confirmed via `docker inspect`), the same network
       # Frigate itself runs on, alongside its own infra_default network.

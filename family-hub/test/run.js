@@ -20,7 +20,8 @@ const MIME = { '.html': 'text/html', '.css': 'text/css', '.svg': 'image/svg+xml'
 function startServer() {
   return new Promise((resolve) => {
     const server = http.createServer((req, res) => {
-      const filePath = path.join(ROOT, decodeURIComponent(req.url.split('?')[0]));
+      const requestPath = decodeURIComponent(req.url.split('?')[0]);
+      const filePath = path.join(ROOT, requestPath);
       fs.readFile(filePath, (err, data) => {
         if (err) { res.writeHead(404); res.end('not found'); return; }
         const ext = path.extname(filePath);
@@ -44,11 +45,49 @@ function check(label, actual, expected) {
   const browser = await chromium.launch();
   const page = await browser.newPage({ viewport: { width: 1600, height: 900 } });
   const jsErrors = [];
+  let handoffRequest = null;
   page.on('pageerror', e => jsErrors.push(e.message));
   page.on('console', msg => { if (msg.type() === 'error') jsErrors.push(msg.text()); });
 
+  // Keep the handoff entirely inside this local QA server. This also proves
+  // the static source never needs to pass a Google token through a URL.
+  await page.route(`http://localhost:${PORT}/api/auth/session`, async route => {
+    const rejected = route.request().headers().authorization === 'Bearer qa-rejected-token';
+    handoffRequest = {
+      method: route.request().method(),
+      url: route.request().url(),
+      headers: route.request().headers(),
+    };
+    await route.fulfill({
+      status: rejected ? 403 : 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ email:'owner@example.com', authSource:'FAMILY_HUB', expiresAt:Date.now()+3600000 }),
+    });
+  });
+
   await page.goto(`http://localhost:${PORT}/family-hub.html`, { waitUntil: 'load' });
   await page.waitForTimeout(400);
+  check('Family Hub hands one accepted Google credential to the platform session endpoint',
+    await page.evaluate(apiBase => establishPlatformSession('qa-google-token', apiBase),
+      `http://localhost:${PORT}`), true);
+  check('handoff is a POST, never a token-bearing navigation', handoffRequest.method, 'POST');
+  check('handoff URL contains no OAuth credential', handoffRequest.url.includes('qa-google-token'), false);
+  check('handoff identifies Family Hub as its source',
+    handoffRequest.headers['x-cabin-auth-source'], 'FAMILY_HUB');
+  check('raw Google credential is not persisted in browser storage',
+    await page.evaluate(() => Object.values({ ...localStorage, ...sessionStorage }).includes('qa-google-token')), false);
+  const errorsBeforeRejectedHandoff = jsErrors.length;
+  check('a rejected automated handoff falls back to cabin-ui direct authentication',
+    await page.evaluate(apiBase => establishPlatformSession('qa-rejected-token', apiBase),
+      `http://localhost:${PORT}`), false);
+  const rejectedHandoffErrors = jsErrors.slice(errorsBeforeRejectedHandoff);
+  check('rejected handoff raises no application JS exception',
+    rejectedHandoffErrors.filter(message =>
+      !message.includes('Failed to load resource: the server responded with a status of 403')).length, 0);
+  // Chromium logs the intentionally mocked 403 as a resource error even though
+  // establishPlatformSession handled it. Do not let that expected browser
+  // message contaminate the later whole-journey application-error assertion.
+  jsErrors.splice(errorsBeforeRejectedHandoff);
   // The remaining journey exercises the signed-in hub surface; auth itself is
   // covered separately in the mobile layering check below.
   await page.evaluate(() => document.getElementById('auth-overlay').classList.add('hidden'));

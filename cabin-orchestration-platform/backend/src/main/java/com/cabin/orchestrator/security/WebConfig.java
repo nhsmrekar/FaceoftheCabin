@@ -9,14 +9,15 @@ import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
  * Only /api/notes, /api/chores, /api/profiles, /api/camera,
  * /api/device-catalog, device writes (GET remains open; see
  * GoogleAuthInterceptor), and (PATCH only, see GoogleAuthInterceptor)
- * /api/tech-id/findings require a Google token —
+ * /api/tech-id/findings require an authenticated platform session or the
+ * same verified Google bearer used to establish one —
  * every other endpoint (device status, dashboard config, events) stays open,
  * matching how it already worked before this interceptor existed.
  *
  * cabin.security.googleAuth.enabled defaults to true (secure by default —
  * absence of the property changes nothing). The only reason it exists is
  * local verification: there's no way to obtain a real Google access token
- * in an automated/offline test run, so integration testing this endpoint
+ * or platform session in an automated/offline integration run, so testing
  * needs a way to turn the gate off. Deliberately not referenced in any
  * shipped compose/.env file — set it only as an ad-hoc local override.
  */

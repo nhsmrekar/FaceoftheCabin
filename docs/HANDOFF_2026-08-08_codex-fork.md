@@ -376,15 +376,27 @@ add/edit/remove calls now fail closed rather than bypassing the lifecycle.
 > method for the hub as longs as the session is active. no more pivoting,
 > and the ux interaction model will be cleaner."
 
-This directly connects to an **already-logged but unbuilt roadmap item**:
-"App-wide Google OAuth gate + consistent landing page" (see
-`docs/DEFINITION_OF_DONE.md`'s "Next Session — Open Items", second
-bullet). Today auth only gates Camera Events/Opportunities panels, not
-the app as a whole, and there's no single persistent session shared across
-camera auth and the rest of the hub. This item should probably be
-designed and built together with that existing roadmap item rather than
-as a separate pass — check `ROADMAP.md`'s matching entry for whatever
-scope notes already exist there before starting design.
+**Implemented in this fork on 2026-08-09; deployment/live-browser verification
+remains open.** Family Hub now exchanges its in-memory verified Google access
+token for a durable, revocable first-party platform session before handing the
+user to cabin-ui. Direct cabin access performs the same exchange after its own
+Google sign-in only when no inherited session exists. The cabin root validates
+the session before mounting any data-bearing UI; cameras and device actions
+reuse it without a second auth step. No raw Google bearer or platform credential
+is stored in browser storage or transported in a URL. Server admission requires
+the configured Google audience plus explicit `CABIN_PLATFORM_AUTH_EMAILS`, and
+the opaque cookie credential is Secure/HttpOnly/SameSite=Lax/host-only with only
+its SHA-256 digest stored. The ontology entries added for this slice distinguish
+authenticated principal, explicit atomic owner, platform session/credential,
+app-wide gate, and landing intent rather than collapsing them into "OAuth."
+
+The default post-auth landing is My Places; a valid explicit `?panel=` deep link
+still wins, and back-forward-cache restoration is reset deterministically.
+Focused backend, cabin-ui, and Family Hub tests cover the handoff and rejection
+paths: 15/15 backend auth/ontology, 67/67 cabin-ui, 50/50 Family Hub, and the
+cabin-ui production build pass. Full backend is 117/120 with zero assertion
+failures; only the same three Docker/Testcontainers classes fail to start. This
+fork has not been deployed or tested across the real production origins.
 
 ### Item 3 — No UI to add additional "My Places"
 

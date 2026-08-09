@@ -190,16 +190,18 @@ accumulate.*
   layouts (today it's one metric, one flex-wrap layout, not yet
   visually verified on a real device). See `ROADMAP.md`'s matching
   entries and `docs/ontology.yaml`'s `camera_health_panel`.
-- **App-wide Google OAuth gate + consistent landing page — new user
-  directive, 2026-08-08, not built yet.** Auth today only gates Camera
-  Events/Opportunities, not the app as a whole; the landing panel isn't
-  consistent (user's report — checked the code, `activePanel` isn't
-  actually persisted anywhere, so this is most likely browser tab/
-  session restoration, not an app bug, but the UX problem is real
-  either way). Full scope in `ROADMAP.md`'s matching entry — needs real
-  design work (auth-before-render gate, Family Hub session reuse or a
-  hard login wall, landing page = My Places per the user's stated
-  assumption) before implementation.
+- **App-wide authentication continuity + consistent landing page — built in
+  the fork 2026-08-09; live deployment/browser verification remains open.**
+  Family Hub now establishes a revocable first-party platform session before
+  handing off to cabin-ui; direct cabin access offers independent Google
+  sign-in only when no valid session exists. The authenticated React tree and
+  all data-loading hooks mount only after session validation, cameras and
+  device mutations reuse that same session, and no Google/platform credential
+  is transported in a URL or persisted in browser storage. The default landing
+  is My Places with valid explicit deep links preserved, including deterministic
+  reset after back-forward-cache restoration. See `ROADMAP.md` Item 2 and the
+  governing ontology entries `platform_auth_session`, `app_wide_auth_gate`,
+  and `post_auth_landing_intent`.
 - **Zigbee LQI signal-quality prototype needs evaluation** (built
   2026-08-08, `GET /api/signal-quality`) — deliberately not wired to
   any alert path yet. Check whether `anomalous` flags correlate with

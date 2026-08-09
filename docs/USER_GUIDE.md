@@ -182,8 +182,10 @@ separate, more sensitive surface — see below.
 
 For actual snapshots, event clips, and live camera viewing,
 `cabin.unicornpingpong.com`'s Camera Events panel is where that lives —
-**Google sign-in required**, gated server-side (not just hidden in the
-UI). This is intentionally a bigger step up in access than the public
+**An admitted platform session is required**, gated server-side (not just
+hidden in the UI). A valid Family Hub session is handed over automatically;
+direct cabin navigation offers Google sign-in when needed. This is
+intentionally a bigger step up in access than the public
 metadata widget above: an image or video frame is categorically more
 sensitive than "motion detected at 3:14pm."
 
@@ -221,11 +223,13 @@ online. If it's been longer than that and still hasn't appeared, check
 that the other device is actually signed in — signed-out devices fall
 back to local-only storage and won't receive or send updates.
 
-**"The camera panel shows nothing / a broken image."** Camera media
-requires Google sign-in on `cabin.unicornpingpong.com` specifically (a
-separate sign-in from Family Hub). If you're signed in and it's still
-empty, there may not have been a recent qualifying event to display —
-check with whoever manages the platform.
+**"The camera panel shows nothing / a broken image."** Camera media uses the
+same platform session as the rest of `cabin.unicornpingpong.com`; it should
+never request a separate camera sign-in. Family Hub hands that session over,
+while direct cabin access offers its own Google sign-in only if the handoff is
+missing, expired, or rejected. If the app is signed in and the panel is still
+empty, there may not have been a recent qualifying event to display — check
+with whoever manages the platform.
 
 **"A family member I added isn't showing up on my phone."** Confirm both
 devices are signed in. New profiles push to the shared directory

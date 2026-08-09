@@ -27,7 +27,7 @@
 #   ontology    — this file and the semantic layer itself
 #
 # ─────────────────────────────────────────────────────────────────────────────
-# Schema v0.4.0 — OWL/Collibra-aligned master data structure
+# Schema v0.4.2 — OWL/Collibra-aligned master data structure
 # ─────────────────────────────────────────────────────────────────────────────
 #
 # Top-level per-element fields:
@@ -113,7 +113,7 @@
 #   notes:            implementation notes, constraints, known issues
 # ─────────────────────────────────────────────────────────────────────────────
 
-version: "0.4.1"
+version: "0.4.2"
 status: draft
 maintainer: FaceoftheCabin platform team
 last_updated: "2026-08-09"
@@ -2271,14 +2271,17 @@ elements:
       docker-compose.yml — this would have blocked EventConsumer on the
       real M920q too, not just local dev, since it's also single-broker.
 
-      Phase 3 BUILT 2026-08-02: cabin-ui's own standalone Google Sign-In
-      (useGoogleAuth() in App.jsx, separate from Family Hub's — reuses the
+      HISTORICAL PHASE 3 STATE, BUILT 2026-08-02: cabin-ui's own standalone
+      Google Sign-In (the former useGoogleAuth() in App.jsx, separate from Family Hub's — reuses the
       same OAuth client via VITE_CABIN_GOOGLE_CLIENT_ID, needs
       cabin.unicornpingpong.com added as an authorized JS origin on that
       client, a manual one-time step) gates a new Camera Events panel.
       /api/events itself stays unauthenticated — this is a client-side
       visibility gate, not a second server-side auth layer, a deliberate
-      scope decision to avoid redundant gating. Deep-linkable via
+      scope decision at that time. SUPERSEDED 2026-08-09 by
+      app_wide_auth_gate + platform_auth_session: the authenticated data tree
+      does not mount before session validation, and Family Hub establishes the
+      same session before handing the user to cabin-ui. Deep-linkable via
       ?panel=CAMERA_EVENTS; Family Hub's "How's the cabin?" link-out now
       points there directly instead of cabin-ui's default landing panel.
       In the same pass, found and fixed cabin-ui's Dockerfile silently
@@ -2590,11 +2593,11 @@ elements:
       Frigate's own GET /api/config directly for the real, current camera
       names + enabled state — no longer derived from anything historical.
 
-      Auth is the other genuinely tricky part here, worth recording:
-      /api/camera/** requires a Google bearer token, but an <img> tag
+      HISTORICAL AUTH STATE (2026-08-02), worth recording for lineage:
+      /api/camera/** required a Google bearer token, but an <img> tag
       can't set custom headers, and this MJPEG stream is unbounded so it
       can't be blob-fetched the way snapshot/clip (finite) can be —
-      GoogleAuthInterceptor now also accepts the token as an
+      GoogleAuthInterceptor then also accepted the token as an
       ?access_token= query param specifically for this case, same
       validation either way. Verified: backend/frontend both compile and
       deploy clean, auth gate confirmed. NOT yet verified: an actual
@@ -2602,7 +2605,11 @@ elements:
       needs a real test, and ideally with driveway or front_door
       reconnected too, not just outdoor_4 (which is currently
       crash-looping on mediamtx 404s — see
-      cabin_camera_continuous_recording's notes).
+      cabin_camera_continuous_recording's notes). SUPERSEDED 2026-08-09:
+      camera media and live view now consume platform_auth_session; bearer
+      tokens and URL/query credentials are not camera authentication paths.
+      The UI fetches the live stream with the same credentialed session used
+      by the rest of cabin-ui, so it cannot introduce a second camera login.
 
       CORS PREFLIGHT BUG, found and fixed 2026-08-03 (see
       docs/DEFINITION_OF_DONE.md's FOURTH CHECK-IN): this is very likely
@@ -5264,18 +5271,15 @@ elements:
       unconfigured" would be actively misleading rather than honest,
       since Tailscale genuinely is the intended out-of-the-box answer.
 
-      The Google Account card is a related but separate concern, NOT
-      modeled as a field on this entity: it reads live state from the
-      existing useGoogleAuth() hook (accessToken/userEmail), not a new
-      config value — see google_oauth_gate's own notes (if/when that
-      entity exists) or ADMIN_EMAILS' existing documentation in
-      REPLICATION.md §2 for the actual access-control mechanism. What
-      changed here is only that the Config panel now shows the real
-      signed-in account and offers Google's own account-chooser
-      ("Switch Google Account", prompt: "select_account") instead of a
-      hardcoded email string — switching to an account not already
-      signed into Google in the same browser remains unsupported,
-      tracked as an open roadmap item, not silently dropped.
+      The Google Account card is a related but separate concern, NOT modeled
+      as a field on this entity. As of 2026-08-09 it reads the verified email
+      and auth source from platform_auth_session through usePlatformAuth(),
+      not a stored Google access token or a deployment config value. Sign-out
+      revokes that first-party session; a new direct sign-in can invoke
+      Google's account chooser. ADMIN_EMAILS/CABIN_PLATFORM_AUTH_EMAILS remain
+      deployment inputs to explicit admission policy, not owner identity and
+      not fields of hub_config. See platform_authenticated_principal,
+      orchestration_hub_owner_identity, and app_wide_auth_gate.
 
   - id: family_profile
     entity_type: owl:Class
@@ -6603,6 +6607,264 @@ elements:
 # Source: Google Photos Picker API → localStorage["smrekar_photos_meta"]
 # ═══════════════════════════════════════════════════════════════════════════
 
+  - id: orchestration_hub_owner_identity
+    entity_type: owl:Class
+    layer: ontology
+    primitive: true
+    schema_version: "0.4.2"
+    migration_status: complete
+    lifecycle_status: candidate
+    data_class: conceptual
+    data_type: owl:Class
+    constraint:
+      description: >
+        Exactly one explicitly configured Google account is the atomic owner
+        of an orchestration-hub deployment. It is never inferred from login
+        order, browser state, email-domain membership, or the first value in a
+        broader family allowlist.
+    ui_display_name: "Hub owner"
+    source: explicit deployment ownership configuration (not yet implemented)
+    rendering:
+      semantic: Hub owner
+      systems: Atomic Owner Identity
+      technical: verified Google subject email with owner authority
+      compliance: Accountable Platform Owner
+    definition: >
+      The single human identity that owns an orchestration-hub deployment and
+      is the ultimate authority for high-consequence configuration decisions.
+    relationships:
+      - target: platform_authenticated_principal
+        type: extends
+        cardinality: "1:1"
+      - target: device_lifecycle_actor_authorization
+        type: controls
+        cardinality: "1:N"
+    relates_to:
+      ui_components: [app_wide_auth_gate]
+      elements: [platform_authenticated_principal, platform_auth_session]
+    notes: >
+      This entry records the user's "atomic owner address" requirement without
+      pretending that today's ADMIN_EMAILS or OAuth test-user list already
+      establishes ownership semantics. Authentication proves who a principal
+      is; this owner concept determines what the one accountable owner may do.
+      Family/member access can be explicitly allowlisted without becoming
+      ownership. No implementation may infer or grandfather the owner.
+
+  - id: platform_authenticated_principal
+    entity_type: owl:Class
+    layer: backend
+    primitive: false
+    schema_version: "0.4.2"
+    migration_status: complete
+    lifecycle_status: used
+    first_used:
+      date: "2026-08-09"
+      ref: "ROADMAP Item 2 app-wide OAuth continuity slice"
+    data_class: derived
+    data_type: owl:Class
+    constraint:
+      description: >
+        Email must come from a Google token whose audience equals the deployed
+        GOOGLE_CLIENT_ID and must match CABIN_PLATFORM_AUTH_EMAILS. An empty
+        platform allowlist fails closed.
+    ui_display_name: "Signed-in account"
+    source: Google tokeninfo response + platform account allowlist
+    rendering:
+      semantic: Signed-in family account
+      systems: Authorized Platform Principal
+      technical: normalized verified Google email
+      compliance: Authenticated Subject
+    definition: >
+      A Google identity that has been verified for this OAuth client and
+      explicitly admitted to use this orchestration-hub deployment.
+    relationships:
+      - target: google_access_token
+        type: derives_from
+        cardinality: "N:1"
+      - target: platform_auth_session
+        type: consumed_by
+        cardinality: "1:N"
+      - target: orchestration_hub_owner_identity
+        type: complements
+        cardinality: "N:1"
+    transformation: >
+      Authorization: Bearer token -> Google tokeninfo validation -> audience
+      check -> normalized email -> explicit platform allowlist decision.
+    relates_to:
+      ui_components: [app_wide_auth_gate]
+      elements: [google_oauth_client_id, platform_auth_session]
+    notes: >
+      "Authenticated" is deliberately not synonymous with "owner" and does
+      not itself grant device-lifecycle authority. This preserves the existing
+      narrower device_lifecycle_actor_authorization boundary while allowing
+      explicitly admitted family accounts to share the ordinary app session.
+
+  - id: platform_auth_session
+    entity_type: owl:Class
+    layer: backend
+    primitive: false
+    schema_version: "0.4.2"
+    migration_status: complete
+    lifecycle_status: used
+    first_used:
+      date: "2026-08-09"
+      ref: "ROADMAP Item 2 app-wide OAuth continuity slice"
+    data_class: composite
+    data_type: owl:Class
+    constraint:
+      description: >
+        Server-side, revocable, time-bounded session. A raw Google access token
+        is accepted only to create the session and is never stored in the
+        session table, browser storage, cookie value, query string, or log.
+    ui_display_name: "Platform session"
+    source: POST /api/auth/session after platform_authenticated_principal validation
+    rendering:
+      semantic: Signed in
+      systems: Active Platform Session
+      technical: platform_auth_session row keyed by SHA-256 credential hash
+      compliance: Revocable Access Session
+    definition: >
+      The first-party session shared by Family Hub and the orchestration UI so
+      one accepted Google authentication authorizes the complete user journey,
+      including cameras, without a second Google prompt.
+    relationships:
+      - target: platform_authenticated_principal
+        type: derives_from
+        cardinality: "N:1"
+      - target: platform_session_credential
+        type: depends_on
+        cardinality: "1:1"
+      - target: app_wide_auth_gate
+        type: consumed_by
+        cardinality: "1:N"
+      - target: cabin_camera_live_view
+        type: consumed_by
+        cardinality: "1:N"
+    transformation: >
+      Family Hub onToken() or direct cabin-ui Google callback -> authenticated
+      session endpoint -> random opaque credential -> SHA-256 hash persisted in
+      Postgres -> HttpOnly host-only cookie returned by api.unicornpingpong.com.
+    relates_to:
+      ui_components: [app_wide_auth_gate, ui_camera_events_panel]
+      elements: [platform_authenticated_principal, platform_session_credential]
+    notes: >
+      The continuity contract is directional and explicit: Family Hub creates
+      the session during its existing OAuth callback; cabin-ui first attempts
+      to inherit it. Direct cabin-ui navigation may create the same session
+      independently. Camera endpoints consume that session and never initiate
+      a separate OAuth flow. If handoff validation rejects the credential or
+      the session has expired/revoked, cabin-ui shows its own login gate.
+
+  - id: platform_session_credential
+    entity_type: owl:DatatypeProperty
+    layer: backend
+    primitive: true
+    schema_version: "0.4.2"
+    migration_status: complete
+    lifecycle_status: used
+    first_used:
+      date: "2026-08-09"
+      ref: "ROADMAP Item 2 app-wide OAuth continuity slice"
+    data_class: raw
+    data_type: xsd:string
+    constraint:
+      format: 256-bit URL-safe cryptographically random value
+      description: >
+        Transported only as a Secure, HttpOnly, SameSite=Lax, host-only cookie;
+        only its SHA-256 digest is stored server-side. Never accepted from a
+        URL/query parameter.
+    ui_display_name: "(not shown)"
+    source: Java SecureRandom in PlatformSessionService
+    rendering:
+      semantic: (not shown)
+      systems: Opaque Session Credential
+      technical: CABIN_PLATFORM_SESSION cookie / SHA-256 database key
+      compliance: Protected Session Secret
+    definition: >
+      The unguessable bearer secret that proves possession of an active
+      platform_auth_session without exposing a Google OAuth token.
+    relationships:
+      - target: platform_auth_session
+        type: consumed_by
+        cardinality: "1:1"
+    relates_to:
+      ui_components: [app_wide_auth_gate]
+      elements: [platform_auth_session]
+
+  - id: app_wide_auth_gate
+    entity_type: owl:Class
+    layer: frontend
+    primitive: false
+    schema_version: "0.4.2"
+    migration_status: complete
+    lifecycle_status: used
+    first_used:
+      date: "2026-08-09"
+      ref: "ROADMAP Item 2 app-wide OAuth continuity slice"
+    data_class: derived
+    data_type: owl:Class
+    ui_display_name: "Sign in to Orchestration Hub"
+    source: GET /api/auth/session before the authenticated React tree mounts
+    rendering:
+      semantic: Sign in before viewing your places
+      systems: Application Authentication Gate
+      technical: App -> AuthGate | AuthenticatedApp mount boundary
+      compliance: Pre-Disclosure Access Control
+    definition: >
+      The root UI boundary that prevents panels, device data, telemetry, rules,
+      cameras, and background polling from mounting until a platform session is
+      inherited or independently established.
+    relationships:
+      - target: platform_auth_session
+        type: depends_on
+        cardinality: "N:1"
+      - target: post_auth_landing_intent
+        type: consumed_by
+        cardinality: "1:1"
+    transformation: >
+      bootstrap session check -> inherited session mounts AuthenticatedApp;
+      otherwise render only the login surface -> successful direct OAuth
+      creates the same session -> mount AuthenticatedApp.
+    relates_to:
+      ui_components: []
+      elements: [platform_auth_session, post_auth_landing_intent]
+
+  - id: post_auth_landing_intent
+    entity_type: owl:DatatypeProperty
+    layer: frontend
+    primitive: false
+    schema_version: "0.4.2"
+    migration_status: complete
+    lifecycle_status: used
+    first_used:
+      date: "2026-08-09"
+      ref: "ROADMAP Item 2 app-wide OAuth continuity slice"
+    data_class: derived
+    data_type: xsd:string
+    constraint:
+      enum: [FAMILY_HUB, FAMILY_CONFIG, DEVICE_MANAGER, MONITORING, RULES_ENGINE, CAMERA_EVENTS, OPPORTUNITY_MAP]
+      description: >
+        A valid explicit ?panel= deep link wins; otherwise every real mount or
+        browser back-forward-cache restore lands on FAMILY_HUB (My Places).
+    ui_display_name: "Landing page"
+    source: URLSearchParams(window.location.search).get("panel") + My Places default
+    rendering:
+      semantic: My Places, unless a specific destination was requested
+      systems: Post-Authentication Landing Intent
+      technical: resolved panel id after auth gate success
+      compliance: Authorized Navigation Target
+    definition: >
+      The deterministic first panel shown after authentication, preserving an
+      explicit valid deep link while preventing accidental restoration of a
+      previously open panel.
+    relationships:
+      - target: app_wide_auth_gate
+        type: depends_on
+        cardinality: "1:1"
+    relates_to:
+      ui_components: [app_wide_auth_gate]
+      elements: [platform_auth_session]
+
   - id: google_access_token
     entity_type: owl:DatatypeProperty
     layer: frontend
@@ -6615,16 +6877,16 @@ elements:
       format: OAuth2 Bearer (Google implicit grant, ya29.* prefix)
       description: intentionally NOT persisted to localStorage — security risk
     ui_display_name: "(not shown)"
-    source: Google Sign-In (GSI) token client, implicit flow
+    source: Google Identity Services OAuth token client, implicit flow
     rendering:
       semantic: (not shown)
       systems: Google Access Token
       technical: accessToken variable (in-memory, not persisted)
       compliance: OAuth Bearer Token
     definition: >
-      The short-lived OAuth 2.0 access token obtained from Google Sign-In via
-      the implicit grant flow. Used as a Bearer token for Google Calendar and
-      Google Photos API requests.
+      The short-lived OAuth 2.0 access token obtained from Google Identity
+      Services. Family Hub uses it for Google Calendar and Photos; either app
+      may present it once to create a first-party platform_auth_session.
     relationships:
       - target: google_oauth_client_id
         type: derives_from
@@ -6635,12 +6897,21 @@ elements:
       - target: calendar_event
         type: consumed_by
         cardinality: "1:N"
+      - target: platform_authenticated_principal
+        type: consumed_by
+        cardinality: "1:N"
     relates_to:
       ui_components: [ui_auth_overlay]
       elements: [google_oauth_client_id, photo_metadata, google_calendar_id]
     notes: >
-      Token lifespan ~1 hour. Re-auth is lightweight — GSI caches credentials
-      in the browser's Google session, usually a single click.
+      Token lifespan is short (normally about one hour). It remains in memory
+      only and is never the cross-app handoff artifact. Google documents that
+      the token model obtains a new token through requestAccessToken() rather
+      than silently persisting or refreshing one in browser storage; therefore
+      cabin-ui's former sessionStorage token and camera query-parameter token
+      transport are removed by the Item 2 continuity slice. A revocable,
+      first-party platform_auth_session provides Hub-to-cabin continuity while
+      the Family Hub keeps its Google API token scoped to its own page lifetime.
 
   - id: google_oauth_client_id
     entity_type: owl:DatatypeProperty

@@ -195,6 +195,10 @@ services:
       # claim on tokens sent to /api/notes and /api/chores against this, so
       # a token from an unrelated Google app can't be used to write here.
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      # The same explicit account list used by Family Hub establishes who may
+      # create the shared first-party platform session. Device lifecycle
+      # authority remains a separate, narrower policy.
+      CABIN_PLATFORM_AUTH_EMAILS: ${ADMIN_EMAILS:-}
       # Tech ID Service findings-submission key -- optional, empty by
       # default (submission returns 503 until an operator sets this).
       # See docs/REPLICATION.md §8.

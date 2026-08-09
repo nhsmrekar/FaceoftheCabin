@@ -75,10 +75,12 @@ categorically more sensitive than "motion detected at 3:14pm." Concretely:
   covered by continuous recording above.
 
 None of this is reachable from the public, no-sign-in Family Hub widget
-described earlier in this note — it lives entirely behind cabin-ui's own
-Google sign-in (`cabin.unicornpingpong.com`), gated server-side on every
-request, not just hidden client-side. If you ever add another signed-in
-user to cabin-ui, they get this same video access — there's no separate,
+described earlier in this note — it lives entirely behind cabin-ui's
+platform session (`cabin.unicornpingpong.com`), gated server-side on every
+request, not just hidden client-side. Family Hub hands an accepted session to
+cabin-ui; direct cabin navigation offers Google sign-in only when there is no
+valid inherited session. Cameras never add a second login. Every explicitly
+admitted platform user gets the same video access — there is no separate,
 finer-grained permission tier for video vs. the rest of cabin-ui today.
 
 ---

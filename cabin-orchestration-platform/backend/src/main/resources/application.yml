@@ -39,8 +39,20 @@ cabin:
     oauthClientId: ${GOOGLE_CLIENT_ID:}
     oauthClientSecret: ${GOOGLE_CLIENT_SECRET:}
   security:
+    cors:
+      # Credentialed cross-subdomain session calls must never use a wildcard
+      # origin. The exact, comma-delimited list remains overrideable for a
+      # separately hosted fork, but a sibling subdomain is never trusted just
+      # because it shares the parent DNS name.
+      allowedOrigins: ${CABIN_CORS_ALLOWED_ORIGINS:https://hub.unicornpingpong.com,https://cabin.unicornpingpong.com,http://localhost:5173,http://127.0.0.1:5173,http://localhost:4080,http://127.0.0.1:4080,http://localhost:4081,http://127.0.0.1:4081}
     googleAuth:
       enabled: true
+    platformSession:
+      # Same deployed account source Family Hub already receives as
+      # ADMIN_EMAILS. Empty is deliberately fail closed.
+      allowedEmails: ${CABIN_PLATFORM_AUTH_EMAILS:}
+      lifetimeHours: ${CABIN_PLATFORM_SESSION_HOURS:12}
+      secureCookie: ${CABIN_PLATFORM_SESSION_SECURE_COOKIE:true}
     deviceAdmission:
       # Comma-separated verified Google accounts allowed to inspect or mutate
       # retained device candidates and lifecycle decisions. Empty is fail

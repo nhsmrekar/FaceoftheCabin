@@ -72,6 +72,21 @@ CREATE TABLE IF NOT EXISTS device_lifecycle_decision (
 CREATE INDEX IF NOT EXISTS idx_device_decision_candidate
     ON device_lifecycle_decision (candidate_id, decided_at DESC);
 
+-- Ontology: platform_auth_session + platform_session_credential.
+-- The browser receives the opaque credential; only its SHA-256 digest is
+-- durable. Google access tokens never enter this table.
+CREATE TABLE IF NOT EXISTS platform_auth_session (
+    credential_hash CHAR(64) PRIMARY KEY,
+    subject_email   VARCHAR(320) NOT NULL,
+    auth_source     VARCHAR(32) NOT NULL,
+    created_at      BIGINT NOT NULL,
+    expires_at      BIGINT NOT NULL,
+    last_seen_at    BIGINT NOT NULL,
+    revoked_at      BIGINT
+);
+CREATE INDEX IF NOT EXISTS idx_platform_auth_session_subject
+    ON platform_auth_session (subject_email, expires_at);
+
 -- Time-series telemetry
 CREATE TABLE IF NOT EXISTS telemetry (
     time      TIMESTAMPTZ NOT NULL,

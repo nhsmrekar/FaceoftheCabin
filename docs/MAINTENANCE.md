@@ -885,7 +885,7 @@ changed by the reviewer — read-only findings from a real browser
 session) found the underlying bugs were in cabin-ui's own error
 handling, not the backend or Frigate:
 
-- **Expired Google token treated as authenticated.** `useGoogleAuth`
+- **Expired Google token treated as authenticated.** The former `useGoogleAuth`
   stored the access token in `sessionStorage` with no expiry tracking,
   so a genuinely expired token still rendered "signed in" (email shown,
   "Sign out" present) while every authenticated request 401'd and
@@ -895,7 +895,10 @@ handling, not the backend or Frigate:
   resurrected; and every authenticated call now goes through one
   `authedFetch` helper that clears the session and sets
   `sessionExpired` on any `401`, instead of each caller independently
-  swallowing the failure.
+  swallowing the failure. **Superseded 2026-08-09:** cabin-ui no longer stores
+  or resurrects a Google token at all. `usePlatformAuth` validates the durable,
+  revocable first-party session before mounting the application, tracks its
+  server-issued expiry, and keeps the same centralized `401` behavior.
 - **A dead camera stream rendered as an unexplained blank box.**
   `CameraLiveView`'s `<img>` against Frigate's MJPEG stream had no
   `onLoad`/`onError` handling — a broken stream produced a "completed"
@@ -915,7 +918,7 @@ handling, not the backend or Frigate:
   Deliberately did not add CORS to Actuator just to drive a status
   badge — that would widen Actuator's exposure for a cosmetic fix.
 
-See `cabin-orchestration-platform/ui/src/App.jsx`'s `useGoogleAuth`,
+See `cabin-orchestration-platform/ui/src/App.jsx`'s `usePlatformAuth`,
 `CameraLiveView`, and `App()`'s `refreshDevices` for the fixed code —
 each carries an inline comment dated the same day explaining the bug.
 

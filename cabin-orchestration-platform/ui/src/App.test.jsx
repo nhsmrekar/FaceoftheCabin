@@ -1,7 +1,7 @@
 import React from "react";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
-import { isCameraEvent, mergeHubLocations, buildCameraEventsUrl, isLocationDeployed, formatPresenceSignals, formatArmedTitle, cameraHealthLabel, allLocationsLabel, checkinStatusLabel, alertEligibleOfflineCount, AppContext, FamilyHubPanel, FamilyConfigPanel, RulesPanel } from "./App.jsx";
+import { isCameraEvent, mergeHubLocations, buildCameraEventsUrl, buildCameraLiveUrl, isLocationDeployed, formatPresenceSignals, formatArmedTitle, cameraHealthLabel, allLocationsLabel, checkinStatusLabel, alertEligibleOfflineCount, resolvePostAuthPanel, AuthGate, App, AppContext, FamilyHubPanel, FamilyConfigPanel, RulesPanel } from "./App.jsx";
 import { ThemeProvider } from "./ThemeProvider.jsx";
 
 // Covers the actual reported bug this session ("Camera Events" showing
@@ -305,6 +305,50 @@ describe("checkinStatusLabel", () => {
   });
 });
 
+describe("Item 2 authentication continuity", () => {
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
+  it("defaults every authenticated entry to My Places", () => {
+    expect(resolvePostAuthPanel("")).toBe("FAMILY_HUB");
+    expect(resolvePostAuthPanel("?panel=unknown")).toBe("FAMILY_HUB");
+  });
+
+  it("preserves an explicit valid deep-link intent through authentication", () => {
+    expect(resolvePostAuthPanel("?panel=CAMERA_EVENTS")).toBe("CAMERA_EVENTS");
+  });
+
+  it("never puts a Google or platform credential in a camera URL", () => {
+    const url = buildCameraLiveUrl("https://api.example.test", "front door");
+    expect(url).toBe("https://api.example.test/api/camera/front%20door/live");
+    expect(url).not.toContain("token");
+    expect(url).not.toContain("?");
+  });
+
+  it("shows only the handoff check while inherited-session validation is pending", () => {
+    render(<ThemeProvider><AuthGate auth={{ checking: true }} /></ThemeProvider>);
+    expect(screen.getByText(/Checking for your Family Hub session/)).toBeTruthy();
+    expect(screen.queryByText("Sign in with Google")).toBeFalsy();
+    expect(screen.queryByText("My Places")).toBeFalsy();
+  });
+
+  it("does not mount or load the application data tree before authentication", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      status: 401,
+      ok: false,
+    });
+
+    render(<ThemeProvider><App /></ThemeProvider>);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+
+    expect(String(fetchMock.mock.calls[0][0])).toMatch(/\/api\/auth\/session$/);
+    expect(screen.queryByText("My Places")).toBeFalsy();
+    expect(screen.queryByText(/devices$/)).toBeFalsy();
+  });
+});
+
 describe("alertEligibleOfflineCount", () => {
   it("uses the ontology-governed configured-device count when available", () => {
     expect(alertEligibleOfflineCount({ offline: 5, alertEligibleOffline: 0 })).toBe(0);
@@ -387,7 +431,7 @@ describe("FamilyConfigPanel", () => {
 
   it("offers a sign-in control when no Google account is signed in", () => {
     renderPanel({ auth: { userEmail: null, signIn: () => {} } });
-    expect(screen.getByText(/Not signed in/)).toBeTruthy();
+    expect(screen.getByText(/No active platform session/)).toBeTruthy();
     expect(screen.getByText("Sign in with Google")).toBeTruthy();
   });
 

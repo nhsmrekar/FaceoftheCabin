@@ -39,7 +39,9 @@ import java.util.Map;
  */
 @RestController
 @RequestMapping("/api/tech-id/findings")
-@CrossOrigin
+@CrossOrigin(
+    origins = "${cabin.security.cors.allowedOrigins:https://hub.unicornpingpong.com,https://cabin.unicornpingpong.com,http://localhost:5173,http://127.0.0.1:5173,http://localhost:4080,http://127.0.0.1:4080,http://localhost:4081,http://127.0.0.1:4081}",
+    allowCredentials = "true")
 public class TechIdController {
 
     private final TechIdFindingService findingService;

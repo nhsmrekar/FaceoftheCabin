@@ -93,56 +93,58 @@ const GRAFANA_DASHBOARD_UID = {
   cabin: "aezbolgn22qdce",
 };
 
-// ─── Panel definitions ─────────────────────────────────────────────────────
-// ─── Google Sign-In — cabin-ui's OWN standalone flow ───────────────────────
-// Deliberately separate from Family Hub's sign-in (a different app, a
-// different session) even though it reuses the same Web-application OAuth
-// client (VITE_CABIN_GOOGLE_CLIENT_ID, same underlying Google Cloud client
-// as family-hub's GOOGLE_CLIENT_ID — needs cabin.unicornpingpong.com added
-// as an authorized JS origin on that client). Gates UI visibility only —
-// /api/events itself stays unauthenticated server-side, same precedent as
-// /api/devices; this is a client-side "who's looking" gate, not a second
-// auth layer on the API.
-//
-// Found 2026-08-03 (external review): a stored token was reused across
-// page loads with no expiry tracking, so a genuinely expired token still
-// rendered as "signed in" (email shown, "Sign out" button present) while
-// every authenticated request silently 401'd and callers converted that
-// into an empty array/list — camera controls just vanished with no
-// explanation. Fixed by tracking `expires_in`, refusing to resurrect an
-// already-expired stored token on load, and centralizing every
-// authenticated request through `authedFetch`, which clears the session
-// and flips `sessionExpired` the moment any call comes back 401.
-function loadStoredGoogleSession() {
-  const token = sessionStorage.getItem("cabinAccessToken");
-  const email = sessionStorage.getItem("cabinUserEmail");
-  const expiresAtRaw = sessionStorage.getItem("cabinTokenExpiresAt");
-  const expiresAt = expiresAtRaw ? Number(expiresAtRaw) : null;
-  // No tracked expiry (a session stored before this fix shipped) is
-  // treated the same as an expired one -- fail closed, not open.
-  if (token && (!expiresAt || Date.now() >= expiresAt)) {
-    sessionStorage.removeItem("cabinAccessToken");
-    sessionStorage.removeItem("cabinUserEmail");
-    sessionStorage.removeItem("cabinTokenExpiresAt");
-    return { token: null, email: null };
-  }
-  return { token, email };
-}
-
-function useGoogleAuth() {
+// ─── Shared platform session ───────────────────────────────────────────────
+// Family Hub establishes this first-party session during its existing Google
+// OAuth callback. Direct cabin-ui navigation can establish the same session
+// independently. The raw Google access token is used once for that exchange,
+// never stored here, and never transported in a camera URL.
+export function usePlatformAuth() {
   const clientId = import.meta.env.VITE_CABIN_GOOGLE_CLIENT_ID || "";
-  const [accessToken, setAccessToken] = useState(() => loadStoredGoogleSession().token);
-  const [userEmail, setUserEmail] = useState(() => loadStoredGoogleSession().email);
+  const authApiBase = LOCATIONS.cabin.apiBase;
+  const [session, setSession] = useState(null);
+  const [checking, setChecking] = useState(true);
   const [sessionExpired, setSessionExpired] = useState(false);
+  const [authError, setAuthError] = useState(null);
   const tokenClientRef = useRef(null);
 
-  const clearSession = useCallback(() => {
-    setAccessToken(null);
-    setUserEmail(null);
-    sessionStorage.removeItem("cabinAccessToken");
-    sessionStorage.removeItem("cabinUserEmail");
-    sessionStorage.removeItem("cabinTokenExpiresAt");
-  }, []);
+  const clearSession = useCallback(() => setSession(null), []);
+
+  const bootstrap = useCallback(() => {
+    setChecking(true);
+    setAuthError(null);
+    return fetch(`${authApiBase}/api/auth/session`, { credentials: "include" })
+      .then(async res => {
+        if (res.status === 401) {
+          clearSession();
+          return;
+        }
+        if (!res.ok) throw new Error(`Session handoff failed (HTTP ${res.status})`);
+        setSession(await res.json());
+        setSessionExpired(false);
+      })
+      .catch(err => {
+        clearSession();
+        setAuthError(err.message);
+      })
+      .finally(() => setChecking(false));
+  }, [authApiBase, clearSession]);
+
+  useEffect(() => { bootstrap(); }, [bootstrap]);
+
+  useEffect(() => {
+    if (!session?.expiresAt) return undefined;
+    const remaining = session.expiresAt - Date.now();
+    if (remaining <= 0) {
+      clearSession();
+      setSessionExpired(true);
+      return undefined;
+    }
+    const timer = setTimeout(() => {
+      clearSession();
+      setSessionExpired(true);
+    }, remaining);
+    return () => clearTimeout(timer);
+  }, [session, clearSession]);
 
   const ensureTokenClient = useCallback(() => {
     if (tokenClientRef.current || !window.google?.accounts?.oauth2 || !clientId) return tokenClientRef.current;
@@ -150,92 +152,89 @@ function useGoogleAuth() {
       client_id: clientId,
       scope: "openid email",
       callback: async (resp) => {
-        if (resp.error) return;
-        setSessionExpired(false);
-        setAccessToken(resp.access_token);
-        sessionStorage.setItem("cabinAccessToken", resp.access_token);
-        // expires_in is seconds-from-now per Google's token response; a
-        // small safety margin (30s) means we treat it as expired slightly
-        // before Google actually would, so a request never races the
-        // exact expiry instant.
-        const expiresAt = Date.now() + (Math.max(Number(resp.expires_in) || 3600, 60) - 30) * 1000;
-        sessionStorage.setItem("cabinTokenExpiresAt", String(expiresAt));
+        if (resp.error || !resp.access_token) {
+          setAuthError(resp.error_description || resp.error || "Google sign-in failed");
+          return;
+        }
         try {
-          const res = await fetch("https://www.googleapis.com/oauth2/v3/userinfo", {
-            headers: { Authorization: `Bearer ${resp.access_token}` },
+          const res = await fetch(`${authApiBase}/api/auth/session`, {
+            method: "POST",
+            credentials: "include",
+            headers: {
+              Authorization: `Bearer ${resp.access_token}`,
+              "X-Cabin-Auth-Source": "DIRECT_CABIN",
+            },
           });
-          const info = await res.json();
-          if (info.email) {
-            setUserEmail(info.email);
-            sessionStorage.setItem("cabinUserEmail", info.email);
-          }
-        } catch { /* email display is cosmetic — sign-in already succeeded */ }
+          if (!res.ok) throw new Error(`Google credentials were rejected (HTTP ${res.status})`);
+          setSession(await res.json());
+          setSessionExpired(false);
+          setAuthError(null);
+        } catch (err) {
+          clearSession();
+          setAuthError(err.message);
+        }
       },
     });
     return tokenClientRef.current;
-  }, [clientId]);
+  }, [authApiBase, clearSession, clientId]);
 
   const signIn = useCallback(() => {
+    setAuthError(null);
     const client = ensureTokenClient();
-    client?.requestAccessToken({ prompt: "select_account" });
+    if (!client) {
+      setAuthError("Google Sign-In is still loading. Try again in a moment.");
+      return;
+    }
+    client.requestAccessToken({ prompt: "select_account" });
   }, [ensureTokenClient]);
 
-  const signOut = useCallback(() => {
+  const signOut = useCallback(async () => {
+    try {
+      await fetch(`${authApiBase}/api/auth/session`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+    } catch { /* local fail-closed state still clears below */ }
     setSessionExpired(false);
+    setAuthError(null);
     clearSession();
-  }, [clearSession]);
+  }, [authApiBase, clearSession]);
 
-  // Called by authedFetch on a 401 -- the token looked valid client-side
-  // (present, not past its tracked expiry) but the server rejected it
-  // anyway (revoked, clock skew, etc.). Clearing accessToken here also
-  // stops any in-flight media: CameraLiveView's <img src> and
-  // useAuthedMediaUrl's effect both key off accessToken being present.
   const handleUnauthorized = useCallback(() => {
     clearSession();
     setSessionExpired(true);
   }, [clearSession]);
 
-  // Every authenticated call in this app should go through this instead
-  // of a raw fetch() + manual Authorization header, so a 401 is handled
-  // once, consistently, instead of each caller independently swallowing
-  // it into an empty array with no visible explanation.
   const authedFetch = useCallback((url, options = {}) => {
-    if (!accessToken) return Promise.reject(new Error("Not signed in"));
+    if (!session) return Promise.reject(new Error("Not signed in"));
     return fetch(url, {
       ...options,
-      headers: { ...(options.headers || {}), Authorization: `Bearer ${accessToken}` },
+      credentials: "include",
+      headers: { ...(options.headers || {}) },
     }).then(res => {
       if (res.status === 401) handleUnauthorized();
       return res;
     });
-  }, [accessToken, handleUnauthorized]);
+  }, [session, handleUnauthorized]);
 
-  // Found 2026-08-03: this hook's return value was a fresh object literal
-  // on every render, which is invisible for consumers that only read
-  // primitive fields off it -- but the new liveview useEffect below
-  // depends on the whole `auth` object, and React's effect-dependency
-  // comparison is reference-based. Without this memo, `auth` "changed"
-  // (a new object, same values) on every App() re-render -- and App()
-  // re-renders constantly from its own 15s device-refresh interval and
-  // friends -- so the liveview effect's cleanup+rerun (stop, then start)
-  // fired every few seconds instead of only on a real sign-in/out. Real
-  // symptom in production: /liveview/start and /stop calls looping every
-  // 5-15s, so the live relay never got more than a few seconds to
-  // stabilize before being torn down and restarted -- the camera view
-  // never had a chance to show anything but the last frame from before
-  // the loop started. `refreshCameraList` in CameraEventsPanel had the
-  // same latent bug (excessive re-fetching), just less visible since
-  // repeating a GET is cheaper than repeatedly restarting a live session.
   return useMemo(() => ({
-    accessToken, userEmail, signedIn: !!accessToken, sessionExpired,
-    signIn, signOut, authedFetch, configured: !!clientId,
-  }), [accessToken, userEmail, sessionExpired, signIn, signOut, authedFetch, clientId]);
+    userEmail: session?.email || null,
+    signedIn: !!session,
+    checking,
+    sessionExpired,
+    authError,
+    authSource: session?.authSource || null,
+    signIn,
+    signOut,
+    authedFetch,
+    configured: !!clientId,
+  }), [session, checking, sessionExpired, authError, signIn, signOut, authedFetch, clientId]);
 }
 
 // ─── Camera media: authenticated snapshot/clip fetch ──────────────────────
-// /api/camera/** requires a Google bearer token (see WebConfig.java) — a
-// plain <img src="..."> or <video src="..."> can't set that header, so we
-// fetch as a blob with fetch() (which can) and hand the component an
+// /api/camera/** requires the inherited/direct platform session (see
+// WebConfig.java) — a plain <img src="..."> or <video src="..."> does not
+// give us the same explicit expiry handling, so fetch as a blob and hand the component an
 // object URL instead. Revokes the previous URL on cleanup/change so this
 // doesn't leak memory as someone scrolls through a long event list.
 function useAuthedMediaUrl(url, authedFetch) {
@@ -301,12 +300,9 @@ function CameraEventClip({ apiBase, authedFetch, frigateEventId }) {
   return <video className="camera-clip-player" src={objectUrl} controls autoPlay muted />;
 }
 
-// Live view uses a plain <img> against Frigate's MJPEG multipart stream —
-// that's the standard way browsers render multipart/x-mixed-replace, but
-// it means the token has to travel as a query param (see
-// GoogleAuthInterceptor's extractToken()) since <img> can't set headers
-// and this stream is unbounded, unlike snapshot/clip above which can be
-// blob-fetched in full.
+// Live view uses a plain <img> against Frigate's MJPEG multipart stream.
+// The browser sends the HttpOnly platform-session cookie to the API, so no
+// Google token or platform credential appears in the media URL.
 //
 // Found 2026-08-03 (external review): a camera whose Frigate stream is
 // down still produces a "completed" <img> load event with
@@ -317,10 +313,14 @@ function CameraEventClip({ apiBase, authedFetch, frigateEventId }) {
 // "success" is treated as a failure, not a success), onError catches a
 // hard failure, and a bounded timeout catches a request that never
 // resolves either way.
-function CameraLiveView({ apiBase, accessToken, cameraName }) {
+export function buildCameraLiveUrl(apiBase, cameraName) {
+  return `${apiBase}/api/camera/${encodeURIComponent(cameraName)}/live`;
+}
+
+function CameraLiveView({ apiBase, cameraName }) {
   const [status, setStatus] = useState("loading"); // loading | ok | error
   const timeoutRef = useRef(null);
-  const src = `${apiBase}/api/camera/${cameraName}/live?access_token=${encodeURIComponent(accessToken)}`;
+  const src = buildCameraLiveUrl(apiBase, cameraName);
 
   useEffect(() => {
     setStatus("loading");
@@ -405,7 +405,7 @@ function CameraEventsPanel({ auth }) {
   // cleanup naturally covers every way this needs to stop: switching to
   // a different camera, clicking "Stop", or leaving this panel entirely.
   useEffect(() => {
-    if (!liveCamera || !auth.accessToken) return;
+    if (!liveCamera || !auth.signedIn) return;
     auth.authedFetch(`${apiBase}/api/camera/${liveCamera}/liveview/start`, { method: "POST" }).catch(() => {});
     return () => {
       auth.authedFetch(`${apiBase}/api/camera/${liveCamera}/liveview/stop`, { method: "POST" }).catch(() => {});
@@ -460,7 +460,7 @@ function CameraEventsPanel({ auth }) {
   // auth.authedFetch so an expired token clears the session instead of
   // this request silently 401ing forever.
   const refreshCameraList = useCallback(() => {
-    if (!auth.accessToken) return;
+    if (!auth.signedIn) return;
     setCameraListError(null);
     auth.authedFetch(`${apiBase}/api/camera/list`)
       .then(r => {
@@ -534,7 +534,7 @@ function CameraEventsPanel({ auth }) {
             ))}
           </div>
           {liveCamera && (
-            <CameraLiveView apiBase={apiBase} accessToken={auth.accessToken} cameraName={liveCamera} />
+            <CameraLiveView apiBase={apiBase} cameraName={liveCamera} />
           )}
         </div>
       )}
@@ -629,7 +629,7 @@ function OpportunityCard({ apiBase, auth, opportunity, entityLabels, onChanged }
   // session clears and auth.sessionExpired flips, instead of this POST
   // just silently 401ing with no visible effect.
   const logAction = (actionType, detail) => {
-    if (!auth.accessToken) return Promise.resolve();
+    if (!auth.signedIn) return Promise.resolve();
     return auth.authedFetch(`${apiBase}/api/tech-id/findings/${opportunity.id}/actions`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -638,7 +638,7 @@ function OpportunityCard({ apiBase, auth, opportunity, entityLabels, onChanged }
   };
 
   const setStatus = (status) => {
-    if (!auth.accessToken) return Promise.resolve();
+    if (!auth.signedIn) return Promise.resolve();
     return auth.authedFetch(`${apiBase}/api/tech-id/findings/${opportunity.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -803,6 +803,38 @@ const PANELS = [
   { id: "CAMERA_EVENTS",  label: "Camera Events",   icon: Camera },
   { id: "OPPORTUNITY_MAP", label: "Opportunities",  icon: Lightbulb },
 ];
+
+export function resolvePostAuthPanel(search = window.location.search) {
+  const requested = new URLSearchParams(search).get("panel");
+  return PANELS.some(panel => panel.id === requested) ? requested : "FAMILY_HUB";
+}
+
+export function AuthGate({ auth }) {
+  return (
+    <div className="auth-gate" role="main" aria-label="Orchestration Hub sign in">
+      <div className="auth-gate-toolbar"><ThemeSwitcher /></div>
+      <div className="auth-gate-card">
+        <ShieldAlert size={38} aria-hidden="true" />
+        <h1>Orchestration Hub</h1>
+        {auth.checking ? (
+          <p>Checking for your Family Hub session…</p>
+        ) : !auth.configured ? (
+          <p>Google Sign-In is not configured on this host.</p>
+        ) : (
+          <>
+            <p>
+              {auth.sessionExpired
+                ? "Your platform session expired. Sign in again to continue."
+                : "Sign in before viewing places, devices, rules, or cameras."}
+            </p>
+            {auth.authError && <p className="auth-gate-error">{auth.authError}</p>}
+            <button className="btn-primary" onClick={auth.signIn}>Sign in with Google</button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
 
 // ─── Context ───────────────────────────────────────────────────────────────
 export const AppContext = createContext(null); // exported for src/App.test.jsx's FamilyHubPanel render test
@@ -1181,15 +1213,14 @@ export function FamilyConfigPanel({ auth }) {
             </>
           ) : (
             <>
-              <p className="config-desc">Not signed in — Camera Events and Opportunities require Google sign-in.</p>
+              <p className="config-desc">No active platform session.</p>
               <button className="btn-secondary" onClick={auth?.signIn}>Sign in with Google</button>
             </>
           )}
           <p className="config-hint">
-            Switching only grants entry if the account is already in this instance's OAuth
-            allowlist (ADMIN_EMAILS) — see ROADMAP.md's "Template Configuration Fields" for how
-            to add accounts when cloning this app. Signing in as an account that isn't currently
-            signed into Google in this browser is tracked as a roadmap item, not yet supported here.
+            Switching only grants entry if the verified account is in this instance's platform
+            allowlist (ADMIN_EMAILS). This is the same session Family Hub hands to this app;
+            cameras do not perform a second authentication.
           </p>
           <a href={`${haUrl}/config/integrations`} target="_blank" rel="noreferrer" className="btn-secondary">
             Manage Home Assistant's Google integration ↗
@@ -1466,6 +1497,7 @@ function DmAddView({ onDone }) {
 
 // ── Zigbee pairing flow ──
 function ZigbeePairingFlow({ onBack, onDone }) {
+  const { auth } = useApp();
   const PAIR_DURATION = 254; // seconds (~4m14s)
   const [phase, setPhase]         = useState("idle"); // idle | pairing | found | done
   const [secondsLeft, setSeconds] = useState(PAIR_DURATION);
@@ -1481,7 +1513,7 @@ function ZigbeePairingFlow({ onBack, onDone }) {
       .then(r => r.json()).catch(() => []);
     prevIds.current = new Set(snap.map(d => d.deviceId));
 
-    await fetch(`${LOCATIONS.cabin.apiBase}/api/devices/permit-join`, {
+    await auth.authedFetch(`${LOCATIONS.cabin.apiBase}/api/devices/permit-join`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ enable: true, duration: PAIR_DURATION })
@@ -1509,7 +1541,7 @@ function ZigbeePairingFlow({ onBack, onDone }) {
   const stopPairing = async () => {
     clearInterval(timerRef.current);
     clearInterval(pollRef.current);
-    await fetch(`${LOCATIONS.cabin.apiBase}/api/devices/permit-join`, {
+    await auth.authedFetch(`${LOCATIONS.cabin.apiBase}/api/devices/permit-join`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ enable: false, duration: 0 })
@@ -1595,7 +1627,7 @@ function ZigbeePairingFlow({ onBack, onDone }) {
 
 // ── Manual add form ──
 function ManualAddForm({ onBack, onDone }) {
-  const { locationCfg } = useApp();
+  const { locationCfg, auth } = useApp();
   const [form, setForm] = useState({
     deviceId: "", name: "", type: "HOME_ASSISTANT_ENTITY",
     protocolAdapter: "ha_rest", connectionString: "", enabled: true,
@@ -1607,7 +1639,7 @@ function ManualAddForm({ onBack, onDone }) {
   const submit = async () => {
     if (!form.deviceId || !form.name) return;
     setSaving(true);
-    await fetch(`${apiBase}/api/devices`, {
+    await auth.authedFetch(`${apiBase}/api/devices`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ...form, capabilities: [] })
@@ -1659,13 +1691,14 @@ function ManualAddForm({ onBack, onDone }) {
 
 // ── L2/L3: Remove ──
 function DmRemoveView({ devices, selected, onSelect, onRefresh }) {
+  const { auth } = useApp();
   const [confirming, setConfirming] = useState(false);
   const sel = selected ? devices.find(d => d.deviceId === selected) : null;
 
   const doRemove = async () => {
     if (!sel) return;
     const apiBase = LOCATIONS[sel.location]?.apiBase || LOCATIONS.cabin.apiBase;
-    await fetch(`${apiBase}/api/devices/${sel.deviceId}`, { method: "DELETE" });
+    await auth.authedFetch(`${apiBase}/api/devices/${sel.deviceId}`, { method: "DELETE" });
     onSelect(null);
     setConfirming(false);
     onRefresh();
@@ -1761,10 +1794,10 @@ function DmDeviceDetail({ device, checkinStatus }) {
 }
 
 function DmLockActions({ device }) {
-  const { refreshDevices } = useApp();
+  const { refreshDevices, auth } = useApp();
   const apiBase = device.location === "home" ? LOCATIONS.home.apiBase : LOCATIONS.cabin.apiBase;
   const cmd = async (command) => {
-    await fetch(`${apiBase}/api/devices/${device.deviceId}/command`, {
+    await auth.authedFetch(`${apiBase}/api/devices/${device.deviceId}/command`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ command })
     });
@@ -1779,6 +1812,7 @@ function DmLockActions({ device }) {
 }
 
 function DmEditForm({ device, onSaved }) {
+  const { auth } = useApp();
   const [name, setName]       = useState(device.name);
   const [enabled, setEnabled] = useState(device.enabled !== false);
   const [saving, setSaving]   = useState(false);
@@ -1787,7 +1821,7 @@ function DmEditForm({ device, onSaved }) {
 
   const save = async () => {
     setSaving(true);
-    await fetch(`${apiBase}/api/devices/${device.deviceId}/config`, {
+    await auth.authedFetch(`${apiBase}/api/devices/${device.deviceId}/config`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name, enabled })
@@ -2147,14 +2181,14 @@ function MnChangeView({ devices, selected, onSelect }) {
 }
 
 function MnRemoveView() {
-  const { activeProfile, displayConfigs, refreshDisplayConfigs, devices } = useApp();
+  const { activeProfile, displayConfigs, refreshDisplayConfigs, devices, auth } = useApp();
   const [removing, setRemoving] = useState(null);
   const configured = Object.values(displayConfigs);
 
   const doRemove = async (cfg) => {
     setRemoving(cfg.deviceId);
     const apiBase = cfg.location === "home" ? LOCATIONS.home.apiBase : LOCATIONS.cabin.apiBase;
-    await fetch(`${apiBase}/api/devices/${cfg.deviceId}/display-config?profile=${activeProfile}`,
+    await auth.authedFetch(`${apiBase}/api/devices/${cfg.deviceId}/display-config?profile=${activeProfile}`,
       { method: "DELETE" }).catch(() => {});
     setRemoving(null);
     refreshDisplayConfigs();
@@ -2197,7 +2231,7 @@ function MnRemoveView() {
 }
 
 function DisplayConfigForm({ device, profile, onSaved }) {
-  const { displayConfigs } = useApp();
+  const { displayConfigs, auth } = useApp();
   const existing = displayConfigs?.[device.deviceId];
 
   const [displayName,      setDisplayName]      = useState(existing?.displayName || "");
@@ -2220,7 +2254,7 @@ function DisplayConfigForm({ device, profile, onSaved }) {
   const save = async () => {
     setSaving(true);
     const apiBase = device.location === "home" ? LOCATIONS.home.apiBase : LOCATIONS.cabin.apiBase;
-    await fetch(`${apiBase}/api/devices/${device.deviceId}/display-config?profile=${profile}`, {
+    await auth.authedFetch(`${apiBase}/api/devices/${device.deviceId}/display-config?profile=${profile}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ displayName, stateLabelMap: labelMap, severityOverride }),
@@ -2854,15 +2888,11 @@ function NavRail({ active, onSelect, alertLevels }) {
   );
 }
 
-// ─── Root App ──────────────────────────────────────────────────────────────
-function App() {
-  // ?panel=CAMERA_EVENTS in the URL opens directly to that panel — lets
-  // Family Hub's "How's the cabin?" link-out jump straight to camera
-  // activity instead of always landing on the default Monitoring panel.
-  const [activePanel,    setActivePanel]    = useState(() => {
-    const requested = new URLSearchParams(window.location.search).get("panel");
-    return PANELS.some(p => p.id === requested) ? requested : "MONITORING";
-  });
+// ─── Authenticated application tree ───────────────────────────────────────
+// This component owns every data-loading hook. App does not mount it until a
+// Family Hub handoff or direct cabin sign-in has produced a valid session.
+export function AuthenticatedApp({ auth }) {
+  const [activePanel,    setActivePanel]    = useState(() => resolvePostAuthPanel());
   const [activeLocation, setActiveLocation] = useState("cabin");
   const [devices,        setDevices]        = useState([]);
   const [config,         setConfig]         = useState({});
@@ -2873,7 +2903,17 @@ function App() {
   const { profile: activeProfile, setProfile, options: presenceOptions, autoDerived: presenceAutoDerived, signals: presenceSignals } = usePresence();
   const securityStates = useSecurityState();
   const { configs: displayConfigs, refetch: refreshDisplayConfigs } = useDisplayConfigs(activeProfile);
-  const cameraAuth = useGoogleAuth();
+
+  // Browser back/forward cache can restore the exact in-memory React tree
+  // without remounting. Treat that restoration as a fresh entry so an
+  // accidental prior panel never defeats the deterministic landing contract.
+  useEffect(() => {
+    const resetRestoredLanding = event => {
+      if (event.persisted) setActivePanel(resolvePostAuthPanel());
+    };
+    window.addEventListener("pageshow", resetRestoredLanding);
+    return () => window.removeEventListener("pageshow", resetRestoredLanding);
+  }, []);
 
   // locationCfg is null when "both" — individual components handle that case.
   const locationCfg = activeLocation !== "both" ? LOCATIONS[activeLocation] : null;
@@ -2948,6 +2988,7 @@ function App() {
       activeProfile, setProfile, presenceOptions, presenceAutoDerived, presenceSignals,
       securityStates,
       displayConfigs, refreshDisplayConfigs,
+      auth,
     }}>
       <div className="app-shell">
         <NavRail active={activePanel} onSelect={setActivePanel} alertLevels={alertLevels} />
@@ -2959,6 +3000,10 @@ function App() {
               <PresenceToggle />
               <SecurityBadge />
               <ThemeSwitcher />
+              <span className="auth-account" title={auth.authSource === "FAMILY_HUB" ? "Inherited from Family Hub" : "Signed in here"}>
+                {auth.userEmail}
+              </span>
+              <button className="btn-secondary auth-signout" onClick={auth.signOut}>Sign out</button>
               {connected ? (
                 <span className="api-status api-ok">
                   <CheckCircle size={12}/> API
@@ -2981,17 +3026,24 @@ function App() {
           </div>
           <div className="panel-area">
             {activePanel === "FAMILY_HUB"     && <FamilyHubPanel />}
-            {activePanel === "FAMILY_CONFIG"  && <FamilyConfigPanel auth={cameraAuth} />}
+            {activePanel === "FAMILY_CONFIG"  && <FamilyConfigPanel auth={auth} />}
             {activePanel === "DEVICE_MANAGER" && <DeviceManagerPanel />}
             {activePanel === "MONITORING"     && <MonitoringPanel active={true} />}
             {activePanel === "RULES_ENGINE"   && <RulesPanel />}
-            {activePanel === "CAMERA_EVENTS"  && <CameraEventsPanel auth={cameraAuth} />}
-            {activePanel === "OPPORTUNITY_MAP" && <OpportunityMapPanel auth={cameraAuth} />}
+            {activePanel === "CAMERA_EVENTS"  && <CameraEventsPanel auth={auth} />}
+            {activePanel === "OPPORTUNITY_MAP" && <OpportunityMapPanel auth={auth} />}
           </div>
         </main>
       </div>
     </AppContext.Provider>
   );
+}
+
+// ─── Root authentication boundary ─────────────────────────────────────────
+export function App() {
+  const auth = usePlatformAuth();
+  if (!auth.signedIn) return <AuthGate auth={auth} />;
+  return <AuthenticatedApp auth={auth} />;
 }
 
 // Guarded so this module can be imported for its exported pure functions

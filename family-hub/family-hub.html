@@ -3607,6 +3607,13 @@ async function onToken(resp) {
     return;
   }
   accessToken = resp.access_token;
+  // Establish the first-party platform session while this accepted Google
+  // credential is already in hand. cabin-ui inherits the resulting HttpOnly
+  // API cookie; the token itself is never placed in storage, a URL, or a
+  // cross-window message. A failed handoff does not break Family Hub — direct
+  // cabin access will present its own login gate, exactly the documented
+  // fallback interaction.
+  await establishPlatformSession(accessToken);
   document.getElementById('auth-overlay').classList.add('hidden');
   await loadCurrentUser();
   startAccessSession();
@@ -3615,6 +3622,28 @@ async function onToken(resp) {
   refreshNotesFromServer().then(ok => { if (ok) renderNotepad(); });
   refreshCompletionFromServer().then(ok => { if (ok) rerenderChoreViews(); });
   refreshProfilesFromServer().then(ok => { if (ok) rerenderProfileViews(); });
+}
+
+async function establishPlatformSession(googleToken, apiBase = CABIN_API_URL) {
+  if (!apiBase || !googleToken) return false;
+  try {
+    const res = await fetch(`${apiBase}/api/auth/session`, {
+      method:'POST',
+      credentials:'include',
+      headers:{
+        Authorization:`Bearer ${googleToken}`,
+        'X-Cabin-Auth-Source':'FAMILY_HUB',
+      },
+    });
+    if (!res.ok) {
+      console.warn(`Platform session handoff was rejected (HTTP ${res.status}); cabin-ui will require direct sign-in.`);
+      return false;
+    }
+    return true;
+  } catch (e) {
+    console.warn('Could not hand the Family Hub session to cabin-ui:', e);
+    return false;
+  }
 }
 
 // Cross-device sync poll — picks up notes/chore/profile changes made on
@@ -3687,6 +3716,13 @@ async function cleanupPickerSession() {
 async function signOut() {
   endAccessSession();
   await cleanupPickerSession();
+  if (CABIN_API_URL) {
+    try {
+      await fetch(`${CABIN_API_URL}/api/auth/session`, {
+        method:'DELETE', credentials:'include',
+      });
+    } catch {}
+  }
   if (accessToken) google.accounts.oauth2.revoke(accessToken, ()=>{});
   accessToken = null;
   currentUserEmail = null;

@@ -607,8 +607,11 @@ ontology_version: "1.0"          # Add this — migration tooling needs a versio
       proxied through cabin-backend and rendered as a plain `<img>` tag in
       cabin-ui. One real wrinkle: `<img>` can't set an Authorization
       header, and this stream is unbounded so it can't be blob-fetched —
-      `GoogleAuthInterceptor` now also accepts the token as an
-      `?access_token=` query param for this one case.
+      `GoogleAuthInterceptor` initially also accepted the token as an
+      `?access_token=` query param for this one case. **Superseded by the
+      2026-08-09 Item 2 continuity slice:** camera requests now use the same
+      HttpOnly first-party platform session as the rest of cabin-ui, and URL
+      token transport has been removed.
 - [x] **(c) Persisted-event review UI**, mostly — `CameraEventsPanel` now
       shows a real thumbnail (authenticated blob-fetch) and an expandable
       clip player per event. **Not done**: real pagination/filtering
@@ -799,8 +802,9 @@ ontology_version: "1.0"          # Add this — migration tooling needs a versio
       remainder.
 - [x] §2e — Renamed "Family Config" nav label and panel header to just
       "Config" (it configures the whole instance, not only family
-      settings). Config panel's Google Account card now reflects the real,
-      switchable `useGoogleAuth()` sign-in used to gate the app itself
+      settings). Config panel's Google Account card now reflects the real
+      signed-in principal from `usePlatformAuth()` and the shared platform
+      session used to gate the app itself
       (not the separate, unrelated Home Assistant Google integration link,
       kept alongside it) — "Switch Google Account" re-opens Google's
       account chooser (`prompt: "select_account"`, already supported by
@@ -1071,50 +1075,38 @@ ontology_version: "1.0"          # Add this — migration tooling needs a versio
       `useMqttTelemetry` hook rendering real messages end-to-end in a
       browser — the transport was never reachable before, so that code
       path is realistically untested, not just unverified today.
-- [ ] **[NEW, PLANNING NEEDED — user directive, 2026-08-08, roadmap for
-      tomorrow, not built tonight]** App-wide Google OAuth gate +
-      consistent landing page. Two separate but related asks:
-      1. **Auth gating is currently inconsistent and too narrow.**
-         `useGoogleAuth()` today only actually gates `CameraEventsPanel`
-         and `OpportunityMapPanel` (passed an `auth` prop) — every other
-         panel (Devices, Monitoring, Config, Rules) renders and loads
-         real data with no sign-in check at all. User's framing: "if
-         we're going to require credentialed google oauth login, it
-         shouldn't just be at the camera events tab — that's silly if it
-         applies to multiple cookies and workflows in
-         cabin.unicornpingpong.com." The gate needs to move to the top
-         of the app — before any panel/data loads, not per-panel.
-      2. **Landing page needs to be consistent, not whatever was open
-         last.** User's report: cabin-ui currently reopens on whatever
-         panel was showing when it was last closed, which reads as
-         unintuitive. **Checked the actual code before roadmapping this
-         — worth starting from an accurate baseline tomorrow**:
-         `activePanel`'s `useState` initializer (App.jsx) does NOT
-         persist to localStorage and defaults to `"MONITORING"` (or
-         `?panel=` from the URL) on every real mount — there is no
-         app-level code currently making this "sticky." What the user is
-         observing is most likely the browser's own tab/session
-         restoration (Chrome reopening the SPA in whatever in-memory
-         state it was in, without a real page load happening at all) —
-         a real UX problem regardless of the mechanism, but tomorrow's
-         session should confirm this diagnosis rather than assume a
-         localStorage bug that doesn't exist in the code as of tonight.
-         User's own assumption: the consistent landing page should be
-         **My Places** (`FamilyHubPanel`) — not confirmed/decided, just
-         their stated default expectation to start planning from.
-      3. **Auth flow on landing, two behaviors requested:** (a) persist/
-         reuse a still-active Family Hub login if one exists (family-hub
-         and cabin-ui already share the same `GOOGLE_CLIENT_ID` — but
-         they're different origins, so this is NOT automatic; needs real
-         design work, e.g. Google's own silent/One Tap re-auth, or some
-         other session-sharing mechanism, not assumed to already work),
-         or (b) if there's no reusable session, require login **before**
-         offering any other data/UI/functionality to load — a hard gate,
-         not the current "some panels check, most don't" state. Explicitly
-         called out as mattering most for **direct navigation** into
-         cabin-ui (a deep link bypassing family-hub's own link-out flow).
-      Scope this properly next session — this is real auth/UX
-      architecture work, not a quick patch.
+- [x] **[BUILT IN FORK 2026-08-09 — LIVE DEPLOYMENT NOT YET VERIFIED]**
+      App-wide authentication continuity + deterministic landing. The
+      ontology-first design distinguishes the Google credential used once for
+      identity proof, the explicitly admitted principal, and the revocable
+      first-party `platform_auth_session`; it does not equate an allowlisted
+      family member with the still-explicitly-unassigned atomic owner.
+      Family Hub establishes that session before linking to cabin-ui, so an
+      already authenticated user is handed over without a second prompt.
+      Direct `cabin.unicornpingpong.com` access independently offers Google
+      sign-in when no session is present. Cameras, device writes, and the rest
+      of the authenticated application consume the same session and never
+      introduce a camera-specific login. The raw Google access token is kept
+      in memory only for Family Hub's Google API calls, is never put in browser
+      storage or a URL, and is not stored server-side; the platform cookie is
+      Secure, HttpOnly, SameSite=Lax and host-only, with only its SHA-256 digest
+      persisted. Admission fails closed unless the verified Google audience
+      and explicit `CABIN_PLATFORM_AUTH_EMAILS` allowlist both conform.
+
+      `App` now validates/inherits the session before mounting any data-loading
+      hooks or panels. A valid `?panel=` deep link is preserved; otherwise a
+      real mount or back-forward-cache restoration lands on **My Places**
+      (`FamilyHubPanel`). Credentialed CORS is restricted to the explicit Hub,
+      Cabin, and local-development origins. Automated verification covers the
+      identity verifier, admission policy, hashed/revocable session service,
+      session controller, interceptor inheritance, hard UI gate, landing
+      resolver, token-free camera URL, and Family Hub handoff/storage contract.
+      Verification: focused backend auth/ontology tests 15/15, cabin-ui 67/67,
+      Family Hub 50/50, and cabin-ui production build passed. Full backend is
+      117/120 with zero assertion failures; the same three pre-existing
+      Testcontainers classes cannot start because Docker is unavailable. Real
+      cross-origin browser behavior and deployment remain unverified because
+      this fork has not touched production.
 - [x] **Device Manager showed every device regardless of the active
       location tab** (found 2026-08-08, user report: switching to Home
       still showed Cabin's devices) — `DmSeeView`/`DmChangeView`/

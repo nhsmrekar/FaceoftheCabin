@@ -187,9 +187,12 @@ accumulate.*
   Replaced with a native `CameraHealthPanel` (Prometheus-sourced,
   Tailscale/internal-only, no new exposure) + a plain Grafana link-out.
   Follow-up open: metric selection/reordering + real kiosk-vs-mobile
-  layouts (today it's one metric, one flex-wrap layout, not yet
-  visually verified on a real device). See `ROADMAP.md`'s matching
-  entries and `docs/ontology.yaml`'s `camera_health_panel`.
+  layouts. Local browser viewport verification on 2026-08-09 confirmed the
+  current one-metric tiles remain legible as a 1400x900 row and 390x844
+  stack across healthy/down/unknown states. It also exposed horizontal
+  overflow in the surrounding mobile toolbar/action shell, so physical-device
+  validation and the distinct curated layouts remain open. See `ROADMAP.md`'s
+  matching entries and `docs/ontology.yaml`'s `camera_health_panel`.
 - **App-wide authentication continuity + consistent landing page — built in
   the fork 2026-08-09; live deployment/browser verification remains open.**
   Family Hub now establishes a revocable first-party platform session before

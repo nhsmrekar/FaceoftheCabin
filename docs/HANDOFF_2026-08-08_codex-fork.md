@@ -605,16 +605,15 @@ mean UX-wise, not just a wiring change.
 - **`front_door` (Reolink) camera still physically off-network.** Needs
   on-site checking (power, WiFi re-pairing) — not fixable remotely by any
   session, Claude or Codex.
-- **`CameraHealthPanel` (new, `6dbbadc`/`196b8e8`) has not been visually
-  verified in a real browser** — this session had no browser/preview tool
-  available. It has Vitest coverage for its pure logic
-  (`cameraHealthLabel()`) but the actual kiosk-vs-mobile layout, metric
-  selection, and visual density the user asked about ("Apple product
-  levels of zero thought process," not wanting a scrollable embed) has
-  not been confirmed against a real device. This is explicitly logged as
-  a follow-up in `ROADMAP.md` and `docs/DEFINITION_OF_DONE.md`'s punch
-  list already — if Codex has browser/preview tooling available, this is
-  a good candidate to actually close out.
+- **`CameraHealthPanel` (new, `6dbbadc`/`196b8e8`) now has partial real-browser
+  evidence, 2026-08-09.** An isolated local run at 1400x900 and 390x844
+  rendered synthetic healthy (5.1 fps), down (0 / No signal), and absent
+  (Unknown) camera metrics correctly. The tiles stay compact at kiosk size
+  and wrap into a legible mobile stack. Do not overstate this as closed:
+  production/physical-device validation is still absent, metric selection
+  and distinct density modes remain unbuilt, and the surrounding app shell
+  horizontally clips its toolbar/action row at 390px. Those are the actual
+  open follow-ups now, not "no browser verification."
 - **`AddPlaceForm` (new, `6dbbadc`) browser verification completed
   2026-08-09** — the isolated local end-to-end result is recorded under Item
   3; this is no longer an open verification item.

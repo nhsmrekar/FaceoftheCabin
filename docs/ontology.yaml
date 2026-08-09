@@ -7965,7 +7965,7 @@ elements:
     entity_type: owl:Class
     layer: backend
     primitive: true
-    schema_version: "0.4.0"
+    schema_version: "0.4.1"
     migration_status: complete
     lifecycle_status: used
     first_used:
@@ -8024,6 +8024,17 @@ elements:
       (`Open Full Dashboard in Grafana`) remains the escape hatch for
       anyone who wants the full, un-curated metric set this panel
       deliberately doesn't try to replicate.
+
+      RESPONSIVE VERIFICATION 2026-08-09: exercised in a real local browser
+      at 1400x900 and 390x844 with synthetic backend responses covering
+      cameraFps > 0, cameraFps == 0, and an absent value. The panel's tiles
+      visibly preserve the distinct N.N fps / No signal / Unknown semantics;
+      they remain a compact row at kiosk size and wrap into a legible stack
+      at mobile size. This is browser-viewport evidence, not a claim of
+      production-data or physical-device validation. The surrounding
+      application shell still overflows horizontally at 390px (toolbar and
+      Monitoring action row clip), so the complete mobile interaction model
+      remains open even though this entity's tile layout itself behaves.
 
       A user with no prior Grafana session still can't use the
       "Open Full Dashboard" link without one manual, direct sign-in

@@ -1057,10 +1057,13 @@ ontology_version: "1.0"          # Add this — migration tooling needs a versio
       confirmed available), what a metric-selection UI looks like (maybe
       an extension of the Config panel), and concretely different
       kiosk vs. mobile layouts rather than one flex-wrap grid trying to
-      serve both. **Not yet visually verified on a real mobile/kiosk
-      viewport at all** — the browser tool was unavailable all session;
-      today's flex-wrap layout is a reasonable default (same pattern as
-      the existing KPI tiles), not a confirmed one.
+      serve both. **Partial browser evidence, 2026-08-09:** at 1400x900 the
+      current tiles form a compact row; at 390x844 they wrap into a legible
+      stack, with healthy/down/unknown semantics intact. This was an isolated
+      local mock, not production or a physical device. The surrounding mobile
+      shell also clips the top toolbar and Monitoring action row horizontally,
+      while metric selection and distinct density modes remain unbuilt; the
+      overall follow-up therefore stays open.
 - [x] "No live messages from ws://..." in the Monitoring panel's Live
       MQTT tile was always going to show that, regardless of hostname —
       found investigating the user's report: mosquitto had no WebSocket

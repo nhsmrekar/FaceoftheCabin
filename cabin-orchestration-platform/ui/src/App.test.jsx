@@ -1,8 +1,22 @@
 import React from "react";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
-import { isCameraEvent, mergeHubLocations, buildCameraEventsUrl, buildCameraLiveUrl, isLocationDeployed, formatPresenceSignals, formatArmedTitle, cameraHealthLabel, allLocationsLabel, checkinStatusLabel, recoveryActionAvailable, recoveryPowerNotice, alertEligibleOfflineCount, resolvePostAuthPanel, AuthGate, App, AppContext, DeviceRecoveryAction, FamilyHubPanel, FamilyConfigPanel, RulesPanel } from "./App.jsx";
+import { isCameraEvent, mergeHubLocations, buildCameraEventsUrl, buildCameraLiveUrl, isLocationDeployed, formatPresenceSignals, formatArmedTitle, cameraHealthLabel, allLocationsLabel, checkinStatusLabel, recoveryActionAvailable, recoveryPowerNotice, alertEligibleOfflineCount, resolvePostAuthPanel, PLATFORM_CONTACT, PlatformContactFooter, AuthGate, App, AppContext, DeviceRecoveryAction, FamilyHubPanel, FamilyConfigPanel, RulesPanel } from "./App.jsx";
 import { ThemeProvider } from "./ThemeProvider.jsx";
+
+describe("platform contact information", () => {
+  afterEach(cleanup);
+
+  it("renders the ontology-approved public contact literals and mail action", () => {
+    render(<PlatformContactFooter />);
+
+    expect(screen.getByRole("contentinfo", { name: "Contact information" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: PLATFORM_CONTACT.email }).getAttribute("href"))
+      .toBe(`mailto:${PLATFORM_CONTACT.email}`);
+    expect(screen.getByText("Starbases: Mpls & StP 55409")).toBeTruthy();
+    expect(screen.getByText("Cabin Country 54829")).toBeTruthy();
+  });
+});
 
 // Covers the actual reported bug this session ("Camera Events" showing
 // device logs instead of camera activity) -- see

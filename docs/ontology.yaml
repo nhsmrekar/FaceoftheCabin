@@ -116,7 +116,7 @@
 version: "0.4.2"
 status: draft
 maintainer: FaceoftheCabin platform team
-last_updated: "2026-08-09"
+last_updated: "2026-08-11"
 
 # ═══════════════════════════════════════════════════════════════════════════
 # HARDWARE ELEMENTS
@@ -8371,3 +8371,137 @@ elements:
       done here -- see ROADMAP.md's Item 5 (Home location setup) and
       Item 4's second half in the Codex handoff doc
       (docs/HANDOFF_2026-08-08_codex-fork.md) for what's still open.
+
+  - id: orchestration_hub_app_shell
+    entity_type: owl:Class
+    layer: frontend
+    primitive: false
+    schema_version: "0.4.2"
+    migration_status: complete
+    lifecycle_status: used
+    first_verified_live: >
+      2026-08-11, isolated local authenticated browser preview at 1400x900
+      and 390x844 confirmed the NavRail, main toolbar, independently scrollable
+      panel area, and page footer as one mounted AuthenticatedApp layout. This
+      verifies structure and responsiveness, not production connectivity.
+    data_class: composite
+    data_type: owl:Class
+    ui_display_name: "Orchestration Hub App Shell"
+    source: "AuthenticatedApp in cabin-ui App.jsx"
+    rendering:
+      semantic: "The signed-in hub page"
+      systems: "Navigation, current-place status, working panel, and page footer"
+      technical: ".app-shell -> NavRail + .main-area -> .main-toolbar + .panel-area + PlatformContactFooter"
+      compliance: "Authenticated post-gate application surface"
+    definition: >
+      The authenticated React page framework that owns global navigation,
+      location and security context, the active work panel, and persistent
+      page-level information outside any individual panel.
+    relationships:
+      - target: app_wide_auth_gate
+        type: depends_on
+        cardinality: "1:1"
+      - target: hub_location
+        type: depends_on
+        cardinality: "N:M"
+    relates_to:
+      ui_components: [ui_platform_contact_footer]
+      elements: [hub_location, platform_contact_information]
+    notes: >
+      This entity names the React orchestration shell specifically. It is not
+      ui_top_bar, which is the separate static Family Hub screen's clock/logo/
+      custody row and must not be used as lineage for cabin-ui components.
+
+  - id: platform_contact_information
+    entity_type: owl:Class
+    layer: frontend
+    primitive: false
+    schema_version: "0.4.2"
+    migration_status: complete
+    lifecycle_status: used
+    first_used:
+      date: "2026-08-11"
+      ref: "PLATFORM_CONTACT and PlatformContactFooter (cabin-ui App.jsx)"
+    data_class: composite
+    data_type: owl:Class
+    constraint:
+      description: >
+        Required public display literals are email=nate@impressive.llc,
+        starbases="Mpls & StP 55409", and cabin_country="54829". The email
+        renders as a mailto action. Location phrases render verbatim and must
+        not be expanded into inferred street addresses or operational hub state.
+    ui_display_name: "Platform Contact Information"
+    source: "Direct owner instruction, 2026-08-11"
+    rendering:
+      semantic: "nate@impressive.llc | Starbases: Mpls & StP 55409 | Cabin Country 54829"
+      systems: "Public platform contact and service-area labels"
+      technical: "PLATFORM_CONTACT frozen object in cabin-ui App.jsx"
+      compliance: "Owner-approved public contact display"
+    definition: >
+      The owner-approved public email and geographic display labels shown on
+      the Orchestration Hub page.
+    relationships:
+      - target: ui_platform_contact_footer
+        type: consumed_by
+        cardinality: "1:1"
+    relates_to:
+      ui_components: [ui_platform_contact_footer]
+      elements: [hub_location]
+    notes: >
+      "Starbases" and "Cabin Country" are intentional user-supplied display
+      language. The postal codes are contextual labels, not proof of a precise
+      address, device presence, admission, configuration, or network authority.
+
+  - id: ui_platform_contact_footer
+    entity_type: owl:Class
+    layer: frontend
+    primitive: false
+    schema_version: "0.4.2"
+    migration_status: complete
+    lifecycle_status: used
+    first_used:
+      date: "2026-08-11"
+      ref: "PlatformContactFooter (cabin-ui App.jsx)"
+    first_verified_live: >
+      2026-08-11, isolated local browser preview in both signed-out and
+      authenticated app-shell states at 1400x900 and 390x844; exact literals
+      and mailto target rendered, with no document-level horizontal overflow.
+      This is UI evidence, not a production deployment claim.
+    data_class: derived
+    data_type: owl:Class
+    constraint:
+      description: >
+        Render platform_contact_information once at the bottom of the signed-out
+        authentication boundary and once at the bottom of the authenticated app
+        shell. Preserve all supplied words and postal codes, make only the email
+        actionable, and wrap without horizontal overflow on narrow screens.
+    ui_display_name: "Platform Contact Footer"
+    source: "platform_contact_information"
+    transformation: >
+      PLATFORM_CONTACT literals -> semantic footer spans + mailto email link ->
+      responsive page-level contact block
+    rendering:
+      semantic: "Contact and service areas"
+      systems: "Persistent platform contact footer"
+      technical: "PlatformContactFooter React component and .platform-contact-footer CSS"
+      compliance: "Public contact disclosure"
+    definition: >
+      The persistent page footer that makes the approved platform contact and
+      geographic labels available before and after authentication.
+    relationships:
+      - target: platform_contact_information
+        type: depends_on
+        cardinality: "1:1"
+      - target: app_wide_auth_gate
+        type: complements
+        cardinality: "1:1"
+      - target: orchestration_hub_app_shell
+        type: consumed_by
+        cardinality: "1:1"
+    relates_to:
+      ui_components: [app_wide_auth_gate, orchestration_hub_app_shell]
+      elements: [platform_contact_information]
+    notes: >
+      The signed-out footer is fixed to the viewport bottom with reserved gate
+      padding; the authenticated footer participates in the main-area flex
+      layout below the independently scrollable panel content.

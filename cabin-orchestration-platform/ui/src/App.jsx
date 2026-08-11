@@ -809,6 +809,26 @@ export function resolvePostAuthPanel(search = window.location.search) {
   return PANELS.some(panel => panel.id === requested) ? requested : "FAMILY_HUB";
 }
 
+// Ontology: platform_contact_information. These are owner-approved public
+// display literals, not inferred postal addresses or runtime location state.
+export const PLATFORM_CONTACT = Object.freeze({
+  email: "nate@impressive.llc",
+  starbases: "Mpls & StP 55409",
+  cabinCountry: "54829",
+});
+
+export function PlatformContactFooter() {
+  return (
+    <footer className="platform-contact-footer" aria-label="Contact information">
+      <a href={`mailto:${PLATFORM_CONTACT.email}`}>{PLATFORM_CONTACT.email}</a>
+      <span className="platform-contact-separator" aria-hidden="true">|</span>
+      <span>Starbases: {PLATFORM_CONTACT.starbases}</span>
+      <span className="platform-contact-separator" aria-hidden="true">|</span>
+      <span>Cabin Country {PLATFORM_CONTACT.cabinCountry}</span>
+    </footer>
+  );
+}
+
 export function AuthGate({ auth }) {
   return (
     <div className="auth-gate" role="main" aria-label="Orchestration Hub sign in">
@@ -832,6 +852,7 @@ export function AuthGate({ auth }) {
           </>
         )}
       </div>
+      <PlatformContactFooter />
     </div>
   );
 }
@@ -3131,6 +3152,7 @@ export function AuthenticatedApp({ auth }) {
             {activePanel === "CAMERA_EVENTS"  && <CameraEventsPanel auth={auth} />}
             {activePanel === "OPPORTUNITY_MAP" && <OpportunityMapPanel auth={auth} />}
           </div>
+          <PlatformContactFooter />
         </main>
       </div>
     </AppContext.Provider>

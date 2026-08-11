@@ -1468,28 +1468,41 @@ above to a concrete recommendation for Home specifically:
   built first — there is no collector-only compose profile in this repo
   yet to actually deploy to either device.
 
-**Coordinator hardware recommendation, same day — changes the POC's
-risk profile, not just a parts pick.** User asked which Zigbee
-coordinator to buy for Home. Recommended: **SMLIGHT SLZB-06 or SLZB-07
-(Ethernet variant preferred over WiFi)** — a *network-attached*
-coordinator, not a USB one. Zigbee2MQTT talks to it over plain TCP
-(`tcp://<ip>:6638`) instead of a directly-attached USB serial device,
-which **sidesteps the entire USB-OTG/`termux-usb`/serial-chipset
-uncertainty** the Termux POC playbook above was built around — a regular
-TCP socket connection needs no special Android permissions at all, unlike
-raw USB device access. Run Zigbee2MQTT itself locally at Home (on
-whichever collector device — the Termux phone or a Pi — connecting to
-the SLZB unit over Home's own LAN), not centralized at Cabin, so Home's
-Zigbee control keeps working even during a Home↔Cabin network hiccup;
-only the resulting MQTT telemetry needs to reach the M920q "main brain."
-**Fallback if matching Cabin's existing setup is preferred instead**:
-the Sonoff Zigbee 3.0 USB Dongle Plus V2 (same coordinator Cabin already
-uses, `ember` adapter, fully proven in this repo) — its CP2102N
-USB-serial chip has reasonably good odds on Android compared to more
-obscure chipsets, if the USB-OTG path is still worth testing. **Not
-recommended**: ConBee II/III (deCONZ) or TI CC2652P-based dongles — both
-fine coordinators on their own, but introduce a second firmware/adapter
-ecosystem alongside Cabin's `ember` setup for no real benefit here.
+**Coordinator hardware — final pick, same day.** Went through three
+rounds: first pass wrongly named SLZB-07 (USB-only, no Ethernet variant
+exists for it — corrected to the SLZB-06 line); second pass landed on
+**SLZB-06Mg24U** (single EFR32MG24 radio, Zigbee-only, matches Cabin's
+`ember`/EmberZNet ecosystem, ~$84–86); user then said they want Thread/
+Matter headroom and cost was close enough to justify it. **Final
+decision: SMLIGHT SLZB-MR5U — $119.99 confirmed (Amazon US).** Dual
+radio, but specifically **two identical EFR32MG24 chips** (not the mixed
+TI+SiLabs pairing every other MRxU variant — MR1U/MR2U/MR3U/MR4U — uses),
+which is the deciding factor: SMLIGHT's own site recommends MR5U
+specifically for "standardizing on Silicon Labs," and because both radios
+are the same EmberZNet-capable chip, Zigbee stays on the same firmware
+family as Cabin's Sonoff coordinator regardless of which of the two
+identical radios it lands on — the mixed-vendor variants would have risked
+Zigbee running on the TI chip (`zstack` adapter) instead, breaking that
+consistency; this was never fully confirmed either way for those variants,
+which is exactly what made MR5U the safer pick. Second radio handles
+Thread/Matter concurrently, on a separate channel, no mutually-exclusive
+tradeoff. **One unconfirmed detail worth checking at setup**: whether the
+Zigbee/Thread role assignment across the two identical radios is fixed or
+user-configurable — SMLIGHT's docs don't spell it out; doesn't change the
+pick (Zigbee lands on an EFR32MG24 either way), just worth a look during
+initial config. Ethernet+WiFi+USB+PoE capable, same network-attached
+architecture as before — Zigbee2MQTT connects over plain TCP
+(`tcp://<ip>:6638`), which still **sidesteps the entire USB-OTG/
+`termux-usb`/serial-chipset uncertainty** the Termux POC playbook was
+built around. Run Zigbee2MQTT itself locally at Home (on whichever
+collector device — the Termux phone or a Pi — connecting to the MR5U over
+Home's own LAN), not centralized at Cabin, so Home's Zigbee control
+survives a Home↔Cabin network hiccup; only MQTT telemetry needs to reach
+the M920q "main brain." **Not recommended**: ConBee II/III (deCONZ) or
+the TI-paired MRxU variants for the reason above; "SLZB-MRW" (a listing
+that doesn't match SMLIGHT's current official MR1U–MR5U lineup at all —
+treat with caution, verify against the manual before buying if considering
+it anyway).
 **Practical effect on the POC playbook**: with an SLZB unit, Phases 2–4
 of `docs/POC_2026-08-08_termux-zigbee-collector.md` (the risky USB-OTG
 part) can likely be skipped in favor of a much simpler "can Termux open

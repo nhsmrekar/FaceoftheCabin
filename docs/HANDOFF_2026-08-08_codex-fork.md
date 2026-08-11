@@ -516,26 +516,38 @@ it) follow that playbook and report back honestly, including a clean
 failure — this is real, unproven hardware behavior, not something to
 simulate or assume passing.
 
-**Coordinator recommendation, same day — changes the POC's risk
-profile.** User asked which Zigbee coordinator to buy. Recommended:
-**SMLIGHT SLZB-06 or SLZB-07, Ethernet variant** (plugs into the router
-like any wired LAN device, own USB-C power, place for good Zigbee RF
-coverage across the house — not necessarily wherever's closest to the
-router) — a *network-attached* coordinator rather than USB, so
-Zigbee2MQTT connects over plain TCP (`tcp://<ip>:6638`). This **sidesteps
-the USB-OTG risk the POC playbook above was built to test** — a TCP
-socket needs no special Android permissions, unlike raw USB serial
-access. Run Zigbee2MQTT locally at Home (not centralized at Cabin) so
-Zigbee control survives a Home↔Cabin network hiccup; only MQTT telemetry
-needs to reach the M920q. Fallback if matching Cabin's own coordinator is
-preferred: Sonoff Zigbee 3.0 USB Dongle Plus V2 (same as Cabin, `ember`
-adapter, already proven in this repo). **The POC playbook hasn't been
+**Coordinator — final pick, same day, after three rounds.** First pass
+wrongly named SLZB-07 (USB-only, no Ethernet variant — corrected to
+SLZB-06). Second pass landed on SLZB-06Mg24U (single EFR32MG24 radio,
+Zigbee-only, ~$84–86). User then said they want Thread/Matter headroom
+and the cost gap was close enough to justify it. **Final: SMLIGHT
+SLZB-MR5U, $119.99 confirmed (Amazon US).** Specifically MR5U and not
+MR1U/MR2U/MR3U/MR4U — those pair a TI chip with a Silicon Labs chip
+(Zigbee's landing spot on that pairing was never confirmed, risking a
+`zstack`-not-`ember` outcome); MR5U uniquely has **two identical
+EFR32MG24 chips**, which SMLIGHT's own site recommends specifically for
+"standardizing on Silicon Labs" — Zigbee stays on the same EmberZNet
+family as Cabin's Sonoff coordinator regardless of which of the two
+identical radios it lands on, while the second radio handles Thread/
+Matter concurrently on a separate channel. **Unconfirmed, worth checking
+at setup, doesn't change the pick**: whether radio-role assignment
+(which chip does Zigbee vs. Thread) is fixed or user-configurable —
+SMLIGHT's docs don't say. Same network-attached architecture as before:
+Ethernet+WiFi+USB+PoE, Zigbee2MQTT connects over plain TCP
+(`tcp://<ip>:6638`), still **sidesteps the USB-OTG risk** the POC
+playbook was built to test. Run Zigbee2MQTT locally at Home (not
+centralized at Cabin) so Zigbee control survives a Home↔Cabin network
+hiccup; only MQTT telemetry needs to reach the M920q. **Explicitly not
+recommended**: the TI-paired MRxU variants for the reason above, and
+"SLZB-MRW" (an Amazon listing that doesn't match SMLIGHT's current
+official MR1U–MR5U lineup at all — verify against the manual before
+trusting it if considering it anyway). **The POC playbook hasn't been
 rewritten for this yet** — no coordinator has actually been purchased as
-of this writing. Once an SLZB unit is in hand with a known IP, Phases
-2–4 of `docs/POC_2026-08-08_termux-zigbee-collector.md` should be
-replaced with a much simpler plain-TCP-socket check rather than the
-USB-OTG gauntlet — don't do that rewrite speculatively before the
-hardware exists, the exact commands depend on the real device.
+of this writing. Once the MR5U is in hand with a known IP, Phases 2–4 of
+`docs/POC_2026-08-08_termux-zigbee-collector.md` should be replaced with
+a much simpler plain-TCP-socket check rather than the USB-OTG gauntlet —
+don't do that rewrite speculatively before the hardware exists, the exact
+commands depend on the real device.
 
 **Codex update, 2026-08-08:** the architecture prerequisite is now scoped in
 [`docs/EXECUTION_PLAN_2026-08-08_collector-hubs.md`](EXECUTION_PLAN_2026-08-08_collector-hubs.md).

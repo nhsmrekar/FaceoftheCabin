@@ -1,8 +1,15 @@
 # POC Playbook — Termux as Home's Local Collector Hub
 
-> **Update, same day, before any coordinator was purchased:** the
-> recommended coordinator is now the **SMLIGHT SLZB-06/07 (Ethernet)** —
-> a *network-attached* coordinator, not USB. That changes what this
+> **Update, same day, before any coordinator was purchased — final pick
+> after three rounds**: the recommended coordinator is the **SMLIGHT
+> SLZB-MR5U** ($119.99 confirmed, Amazon US) — dual radio, both chips
+> the same EFR32MG24 (Silicon Labs), chosen over the single-radio
+> SLZB-06Mg24U for Thread/Matter headroom, and over the other MRxU
+> variants (MR1U/2U/3U/4U, which pair a TI chip with a Silicon Labs chip)
+> because MR5U's matched-chip design keeps Zigbee on the same EmberZNet/
+> `ember` family Cabin's own coordinator uses regardless of which radio
+> it lands on — the mixed-vendor variants never had that confirmed. It's
+> still a *network-attached* coordinator, not USB. That changes what this
 > playbook needs to test: Zigbee2MQTT would talk to it over a plain TCP
 > socket, which sidesteps Phases 2–4's entire USB-OTG/`termux-usb`
 > concern. **This document has not been rewritten for that yet** — the

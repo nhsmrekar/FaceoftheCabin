@@ -1,81 +1,82 @@
-# Frigate NVR configuration
+# Frigate NVR configuration used by the M920q cabin stack.
 # https://docs.frigate.video
 #
-# Env var substitution: {VAR} in this file reads from Frigate container environment.
-# CAMERA_PASSWORD must be set in infra/.env (copied from .env.m920q.example).
-#
-# Camera static IPs (set on each camera via Reolink app before deploying):
-#   driveway  → 192.168.2.200  (Reolink RLC-820A)
-#   front_door → 192.168.2.201  (not yet purchased)
-#
-# RTSP URL format for Reolink:
-#   main stream: rtsp://admin:{CAMERA_PASSWORD}@<IP>:554/h264Preview_01_main
-#   sub  stream: rtsp://admin:{CAMERA_PASSWORD}@<IP>:554/h264Preview_01_sub
-#   Use sub for detect (640x480, low CPU), main for record (4K).
-
-# Prometheus metrics at /api/metrics, scraped by infra/prometheus.yml.
-metrics:
-  enabled: True
+# CAMERA_PASSWORD is supplied through the Frigate container environment.
+# The M920q processes cameras at both Cabin and Home; camera-key prefixes
+# describe the physical location, not the host running Frigate.
 
 mqtt:
-  host: cabin-mqtt
+  host: mosquitto
   port: 1883
   topic_prefix: cabin/camera
   client_id: frigate
 
-cameras:
+review:
+  alerts:
+    labels: [person, car, bicycle, motorcycle, truck, bus, bear, dog, cat]
 
+cameras:
+  # Cabin Reolink RLC-820A.
+  front_door:
+    enabled: true
+    ffmpeg:
+      inputs:
+        - path: rtsp://admin:{CAMERA_PASSWORD}@192.168.2.200:554/h264Preview_01_sub
+          roles: [detect]
+        - path: rtsp://admin:{CAMERA_PASSWORD}@192.168.2.200:554/h264Preview_01_main
+          roles: [record]
+    detect:
+      enabled: true
+      width: 640
+      height: 480
+      fps: 5
+    record:
+      enabled: true
+    snapshots:
+      enabled: true
+    objects:
+      track: &tracked_objects [person, car, bicycle, motorcycle, truck, bus, bear, dog, cat]
+
+  # Cabin Blink Outdoor 4 via blinkbridge and MediaMTX.
   driveway:
     enabled: true
     ffmpeg:
       inputs:
-        # Sub-stream: low-res, used for motion detection (saves CPU)
-        - path: rtsp://admin:{CAMERA_PASSWORD}@192.168.2.200:554/h264Preview_01_sub
-          roles:
-            - detect
-        # Main stream: 4K, used for recording
-        - path: rtsp://admin:{CAMERA_PASSWORD}@192.168.2.200:554/h264Preview_01_main
-          roles:
-            - record
+        - path: rtsp://mediamtx:8554/outdoor_4_-_dhee
+          roles: [detect, record]
     detect:
       enabled: true
-      width: 640
-      height: 480
+      width: 1280
+      height: 720
       fps: 5
     record:
       enabled: true
-      retain:
-        days: 7
-      events:
-        retain:
-          default: 7
-          mode: motion
     snapshots:
       enabled: true
-      retain:
-        default: 7
     objects:
-      track:
-        - person
-        - car
+      track: *tracked_objects
 
-  front_door:
-    enabled: false   # camera not yet installed
+  # Home Blink camera processed on the M920q. Live inspection confirmed
+  # blinkbridge publishes AldrichFront to this credential-free container
+  # endpoint. Manual Live View is recordable here; automatic triggering
+  # separately depends on Blink exposing a cloud motion event.
+  home_aldrich_front:
+    enabled: true
     ffmpeg:
       inputs:
-        - path: rtsp://admin:{CAMERA_PASSWORD}@192.168.2.201:554/h264Preview_01_sub
-          roles:
-            - detect
-        - path: rtsp://admin:{CAMERA_PASSWORD}@192.168.2.201:554/h264Preview_01_main
-          roles:
-            - record
+        - path: rtsp://mediamtx:8554/aldrichfront
+          roles: [detect, record]
     detect:
-      enabled: false
-      width: 640
-      height: 480
+      enabled: true
+      width: 1280
+      height: 720
       fps: 5
     record:
-      enabled: false
+      enabled: true
+    snapshots:
+      enabled: true
+    objects:
+      track: *tracked_objects
 
 detectors:
   cpu1:
@@ -84,16 +85,26 @@ detectors:
 
 record:
   enabled: true
-  retain:
-    days: 7
-  events:
-    retain:
-      default: 7
-      mode: motion
+  alerts:
+    pre_capture: 15
+    post_capture: 60
+  detections:
+    pre_capture: 15
+    post_capture: 60
+  continuous:
+    days: 5
 
 snapshots:
   enabled: true
-  retain:
-    default: 7
 
 version: 0.17-0
+
+classification:
+  custom:
+    Person On Foot:
+      enabled: true
+      name: Person On Foot
+      threshold: 0.8
+      object_config:
+        objects: [person]
+        classification_type: attribute
